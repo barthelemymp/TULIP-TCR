@@ -123,38 +123,19 @@ def main():
         type=str,
         help="project name in wandb repo"
     )
-    parser.add_argument("--flex", action="store_true", help="Whether to run training.")
+
     parser.add_argument("--freeze", action="store_true", help="Whether to run training.")
     parser.add_argument("--saveepoch", action="store_true", help="Whether to run training.")
-    parser.add_argument("--skipMiss", action="store_true", help="Whether to run training.")
-    parser.add_argument("--mhcX", action="store_true", help="Whether to run training.")
-    parser.add_argument("--below20", action="store_true", help="Whether to run training.")
+
     args = parser.parse_args()
 
     with open(args.modelconfig, "r") as read_file:
         print("loading hyperparameter")
         modelconfig = json.load(read_file)
 
-    if args.flex:
-        if args.skipMiss:
-            from src.multiTransFlex2 import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
-        else:
-            from src.multiTransFlex import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
-    else:
-        if args.skipMiss:
-            from src.multiTrans2 import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
-        else:
-            from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
 
+        from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
 
-
-
-    #     from src.multiTransFlex import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
-    # elif args.flex2:
-    #     print("flex2")
-    #     from src.multiTransFlex2 import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
-    # else:
-    #     from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
 
 
 
@@ -335,168 +316,9 @@ def main():
     wandb.config.update(config_dict) 
     trigger_sync() 
 
-    if args.to_track:
-        target_peptidesFinal = np.load(args.to_track)
-    else:
-        target_peptidesFinal = ['GILGFVFTL',
-        'NLVPMVATV',
-        'GLCTLVAML',
-        'ELAGIGILTV',
-        'YLQPRTFLL',
-        'LLWNGPMAV',
-        'CINGVCWTV',
-        'FLYALALLL',
-        'LLYDANYFL',
-        'SLFNTVATLY',
-        'ALWEIQQVV',
-        'RTLNAWVKV',
-        'RLPGVLPRA',
-        'LLFGYPVYV',
-        'LLDFVRFMGV',
-        'FLASKIGRLV',
-        'FLPRVFSAV',
-        'ALSKGVHFV',
-        'FLHVTYVPA',
-        'KLVAMGINAV',
-        'KSVNITFEL',
-        'VMVELVAEL',
-        'CLAVHECFV',
-        'FLLNKEMYL',
-        'RLARLALVL',
-        'AAGIGILTV',
-        'AMQTMLFTM',
-        'YLNDHLEPWI',
-        'RIMTWLDMV',
-        'MMILSDDAV',
-        'FIAGLIAIV',
-        'KVLEYVIKV',
-        'FLNRFTTTL',
-        'YIDIGDYTV',
-        'RLGPVQNEV',
-        'ALYGFVPVL',
-        'KLSYGIATV',
-        'EAAGIGILTV',
-        'CVNGSCFTV',
-        'YMPYFFTLL',
-        'ILGFVFTLT',
-        'WLDMVDTSL',
-        'WLLWPVTLA',
-        'RMFPNAPYL',
-        'TLLFLMSFT',
-        'HLMSFPQSA',
-        'KVYPIILRL',
-        'QVILLNKHI',
-        'VFLVLLPLV',
-        'ALLPGLPAA',
-        'KTWGQYWQV',
-        'SWMESEFRV',
-        'TILTSLLVL',
-        'NLHPDSATL',
-        'KLNEEIAII',
-        'WLTNIFGTV',
-        'LITGRLQSL',
-        'TLMNVITLV',
-        'KLNIKLLGV',
-        'SLPGVFCGV',
-        'SLENVAFNV',
-        'FLALCADSI',
-        'FLIGCNYLG',
-        'YTVSCLPFT',
-        'SACVLAAEC',
-        'ALYYPSARI',
-        'VLLGVKLFGV',
-        'SVLYYQNNV',
-        'YLGGMSYYC',
-        'SLLMPILTL',
-        'YMRSLKVPA',
-        'QMAPISAMV',
-        'KLSALGINAV',
-        'TLEYMDWLV',
-        'IQPGQTFSV',
-        'SMMILSDDA',
-        'RLYLDAYNM',
-        'KLYGLDWAEL',
-        'SGGGETALA',
-        'KLPDDFTGCV',
-        'HMTEVVRHC',
-        'FLAHIQWMV',
-        'NVLTLVYKV',
-        'MLNPNYEDL',
-        'FLNGSCGSV',
-        'LLLTILTSL',
-        'KLIEYTDFA',
-        'MQVESDDYI',
-        'ALNTPKDHI',
-        'ILAYCNKTV',
-        'KIILFLALI',
-        'SLLSVLLSM',
-        'RTIKVFTTV',
-        'KDNVILLNK',
-        'KLWAQCVQL',
-        'MLDLQPETT',
-        'TALALLLLD',
-        'LMWLSYFIA',
-        'LLLEWLAMA',
-        'KLPDDFMGC',
-        'KLFIRQEEV',
-        'YVWKSYVHV',
-        'FLPGVYSVI',
-        'LPDDFMGCV',
-        'NLIDSYFVV',
-        'GLALYYPSA',
-        'VLNDILSRL',
-        'TLIGDCATV',
-        'KQIYKTPPI',
-        'KQLSSNFGA',
-        'NLNCCSVPV',
-        'IMDQVPFSV',
-        'KLQCVDLHV',
-        'CLEASFNYL',
-        'KLQFTSLEI',
-        'YLNTLTLAV',
-        'LLFNKVTLA',
-        'FVAAIFYLI',
-        'RLCAYCCNI',
-        'KLKDCVMYA',
-        'ALDPHSGHFV',
-        'QVVSDIDYV',
-        'YLNSTNVTI',
-        'LMGHFAWWT',
-        'AIFYLITPV',
-        'SLINTLNDL',
-        'AVIKTLQPV',
-        'DLFMRIFTI',
-        'VLWAHGFEL',
-        'KLFEFLVYGV',
-        'RLFARTRSM',
-        'YADVFHLYL',
-        'IMLCCMTSC',
-        'FLLPSLATV',
-        'SMWALVISV',
-        'FTVLCLTPV',
-        'FVVFLLVTL',
-        'DRLNQLESK',
-        'FLCLFLLPS',
-        'SLLMWITQV',
-        'YLLEMLWRL',
-        'TMCDIRQLL',
-        'DQVILLNKH',
-        'YVDNSSLTI',
-        'KMDYFSGQL',
-        'IKLDDKDPQ',
-        'LIDFYLCFL',
-        'YGFQPTNGV']
+
 
     target_peptidesFinal = pd.read_csv(test_path)["peptide"].unique()
-
-    # if args.below20:
-    #     test_path =  "../NetTCR/dataNew/Full_below20withneg_2.csv"
-    #     train_path ="../NetTCR/dataNew/Full_train_pretune_mhcX_2.csv"
-    #     datasetTrainFull = TCRDataset("../NetTCR/dataNew/Full_train_pretune_mhcX_2.csv", tokenizer, device,excluded_peptide=peplistout, mhctok=mhctok)
-    #     train_dataloaderFull = torch.utils.data.DataLoader(dataset=datasetTrainFull, batch_size=args.batch_size, shuffle=True, collate_fn=datasetTrainFull.all2allmhc_collate_function) 
-    #     target_peptidesFinal = peplistout
-    #     datasetValidFinal = TCRDataset(test_path, tokenizer, device,target_binder=False, mhctok=mhctok)
-    #     valid_dataloaderFinal = torch.utils.data.DataLoader(dataset=datasetValidFinal, batch_size=args.batch_size, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
 
 
 
