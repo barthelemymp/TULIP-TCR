@@ -3,6 +3,8 @@ This repo implement the TULIP method for modeling the interaction between peptid
 
 ## src
 The src folder contains the code for the model.
+For now you ll find two model, a pretrained one one a large dataset of heterogenous TCRs, and a finetuned on for hla A02-01 with TCRs containing both the alpha and the beta chain.
+
 
 ## model_weights
 model weights are in the model_weights folder
