@@ -1449,22 +1449,7 @@ def unsupervised_auc(model, test_dataloader, ignore_index):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def get_logproba(dataset, model, ignore_index):
+def get_logscore(dataset, model, ignore_index):
     dataloaderPetideSpecific = torch.utils.data.DataLoader(dataset=dataset, batch_size=100, shuffle=False, collate_fn=dataset.all2allmhc_collate_function)
     model.eval()
     with torch.no_grad():
