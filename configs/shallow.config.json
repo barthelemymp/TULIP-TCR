@@ -1,0 +1,5 @@
+{
+    "num_attn_heads": 1,
+    "num_hidden_layers": 2,
+    "hidden_size": 128
+}
