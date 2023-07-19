@@ -1,0 +1,1 @@
+{"special_tokens_map_file": "Seledorn/RITA_tokenizer/special_tokens_map.json", "name_or_path": "Seledorn/RITA_tokenizer", "tokenizer_class": "PreTrainedTokenizerFast"}
