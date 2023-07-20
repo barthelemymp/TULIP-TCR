@@ -94,7 +94,7 @@ def main():
     with open(args.modelconfig, "r") as read_file:
         print("loading hyperparameter")
         modelconfig = json.load(read_file)
-        from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
+        from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip
 
 
     torch.manual_seed(0)
@@ -175,7 +175,7 @@ def main():
     decoderE = ED_BertForSequenceClassification(config=decoder_config) #BertForMaskedLM
     decoderE.pooler = BertLastPooler(config=decoder_config)
     # Define encoder decoder model
-    model = ED_MultiTransformerModel(encoderA=encoderA,encoderB=encoderB,encoderE=encoderE, decoderA=decoderA, decoderB=decoderB, decoderE=decoderE)
+    model = Tulip(encoderA=encoderA,encoderB=encoderB,encoderE=encoderE, decoderA=decoderA, decoderB=decoderB, decoderE=decoderE)
 
     def count_parameters(mdl):
         return sum(p.numel() for p in mdl.parameters() if p.requires_grad)

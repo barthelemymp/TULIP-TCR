@@ -111,18 +111,7 @@ def main():
         type=float,
         help="learning rate" ,
     )
-    parser.add_argument(
-        "--to_track",
-        default=None,
-        type=str,
-        help="numpy array of the string "
-    )
-    parser.add_argument(
-        "--wb_dir",
-        default="MHCtest",
-        type=str,
-        help="project name in wandb repo"
-    )
+
 
     parser.add_argument("--freeze", action="store_true", help="Whether to run training.")
     parser.add_argument("--saveepoch", action="store_true", help="Whether to run training.")
@@ -134,7 +123,7 @@ def main():
         modelconfig = json.load(read_file)
 
 
-        from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
+    from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip
 
 
 
@@ -146,20 +135,9 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("Using device:", device)
 
-    do_reweight = False
-    reweight_pc = 0.0
+
     test_path = args.test_dir
     train_path = args.train_dir
-
-    if args.below20:
-        train = pd.read_csv("../NetTCR/dataNew/Full_train_pretune_2.csv")
-        peplist = train["peptide"].value_counts()
-        peplistout = list(peplist[peplist<20].index)
-        peplistin = list(peplist[peplist>19].index)
-        test_path =  "../NetTCR/dataNew/Full_below20withneg_2.csv"
-        train_path ="../NetTCR/dataNew/Full_train_pretune_mhcX_2.csv"
-        datasetTrainFull = TCRDataset("../NetTCR/dataNew/Full_train_pretune_mhcX_2.csv", tokenizer, device,excluded_peptide=peplistout, mhctok=mhctok)
-        target_peptidesFinal = peplistout
 
     # mhcX = False
     # hideMHC = True
@@ -234,7 +212,7 @@ def main():
 
 
     # Define encoder decoder model
-    model = ED_MultiTransformerModel(encoderA=encoderA,encoderB=encoderB,encoderE=encoderE, decoderA=decoderA, decoderB=decoderB, decoderE=decoderE)
+    model = Tulip(encoderA=encoderA,encoderB=encoderB,encoderE=encoderE, decoderA=decoderA, decoderB=decoderB, decoderE=decoderE)
 
     def count_parameters(mdl):
         return sum(p.numel() for p in mdl.parameters() if p.requires_grad)
@@ -249,11 +227,6 @@ def main():
         checkpoint = torch.load(args.load+"/pytorch_model.bin")
         model.load_state_dict(checkpoint)
         print("loaded")
-
-    if do_reweight:
-        model.set_reweight()
-    else:
-        model.reweight=False
 
 
     model.to(device)
@@ -288,9 +261,6 @@ def main():
     valid_dataloaderFinal = torch.utils.data.DataLoader(dataset=datasetValidFinal, batch_size=args.batch_size, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
 
 
-    #valid_dataloaderFull = torch.utils.data.DataLoader(dataset=datasetValidFull, batch_size=1, shuffle=True, collate_fn=datasetValidFull.all2allmhc_collate_function) 
-
-
     masker = MyMasking(tokenizer, mlm_probability = 0.15)
 
 
@@ -302,16 +272,10 @@ def main():
         'dropout':  0.1,
         'lr':  args.lr,
         'weight_decay': args.weight_decay,
-        "do_reweight": do_reweight,
-        "reweight_pc":reweight_pc,
-        "mhcX": args.mhcX,
-        "flex":args.flex,
-        "skipMiss":args.skipMiss,
-        "below20":args.below20,
         "pretrainedmodel":args.load,
     }
 
-    wandb.init(project=args.wb_dir, entity="barthelemymp", config=config_dict)
+    wandb.init(project="yourproject", entity="YOURWB", config=config_dict)
     trigger_sync() 
     wandb.config.update(config_dict) 
     trigger_sync() 

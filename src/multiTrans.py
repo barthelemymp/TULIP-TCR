@@ -475,7 +475,8 @@ def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start
 
 
 # @add_start_docstrings(ENCODER_DECODER_START_DOCSTRING)
-class ED_MultiTransformerModel(PreTrainedModel):
+# class Tulip(PreTrainedModel):
+class Tulip(PreTrainedModel):
     r"""
     [`EncoderDecoderModel`] is a generic model class that will be instantiated as a transformer architecture with one
     of the base model classes of the library as encoder and another one as decoder when created with the
@@ -485,6 +486,7 @@ class ED_MultiTransformerModel(PreTrainedModel):
     config_class = EncoderDecoderConfig
     #config_class = multiTransConfig
     base_model_prefix = "encoder_decoder"
+
 
     def __init__(
         self,
@@ -539,7 +541,7 @@ class ED_MultiTransformerModel(PreTrainedModel):
         if decoderE is None:
             from ..auto.modeling_auto import AutoModelForCausalLM
             decoderE = AutoModelForCausalLM.from_config(config.decoder)
-
+        self.reweight=False
         self.encoderA = encoderA
         self.decoderA = decoderA
         self.encoderB = encoderB
@@ -1438,9 +1440,9 @@ def unsupervised_auc(model, test_dataloader, ignore_index):
 
         # print(Boolbinders)
         # print(clf_scoree)
-        auca = roc_auc_score(Boolbinders, clf_scorea)
-        aucb = roc_auc_score(Boolbinders, clf_scoreb)
-        auce = roc_auc_score(Boolbinders, clf_scoree)
+        auca = roc_auc_score(Boolbinders, -1*clf_scorea)
+        aucb = roc_auc_score(Boolbinders, -1*clf_scoreb)
+        auce = roc_auc_score(Boolbinders, -1*clf_scoree)
         return auca, aucb, auce
 
 

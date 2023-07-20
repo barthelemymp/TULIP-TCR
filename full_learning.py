@@ -111,42 +111,25 @@ def main():
         type=float,
         help="learning rate" ,
     )
-    parser.add_argument(
-        "--to_track",
-        default=None,
-        type=str,
-        help="numpy array of the string "
-    )
-    parser.add_argument("--flex", action="store_true", help="Whether to run training.")
-    parser.add_argument("--skipMiss", action="store_true", help="Whether to run training.")
-    parser.add_argument("--mhcX", action="store_true", help="Whether to run training.")
-    parser.add_argument("--below20", action="store_true", help="Whether to run training.")
+
     args = parser.parse_args()
 
     with open(args.modelconfig, "r") as read_file:
         print("loading hyperparameter")
         modelconfig = json.load(read_file)
 
-    if args.flex:
-        if args.skipMiss:
-            from src.multiTransFlex2 import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
-        else:
-            from src.multiTransFlex import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
-    else:
-        if args.skipMiss:
-            from src.multiTrans2 import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
-        else:
-            from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
+
+    from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip
 
 
 
 
-    #     from src.multiTransFlex import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
+    #     from src.multiTransFlex import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip
     # elif args.flex2:
     #     print("flex2")
-    #     from src.multiTransFlex2 import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
+    #     from src.multiTransFlex2 import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip
     # else:
-    #     from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, ED_MultiTransformerModel
+    #     from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip
 
 
 
@@ -157,20 +140,11 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("Using device:", device)
 
-    do_reweight = False
-    reweight_pc = 0.0
+
     test_path = args.test_dir
     train_path = args.train_dir
 
-    if args.below20:
-        train = pd.read_csv("../NetTCR/dataNew/Full_train_pretune_2.csv")
-        peplist = train["peptide"].value_counts()
-        peplistout = list(peplist[peplist<20].index)
-        peplistin = list(peplist[peplist>19].index)
-        test_path =  "../NetTCR/dataNew/Full_below20withneg_2.csv"
-        train_path ="../NetTCR/dataNew/Full_train_pretune_mhcX_2.csv"
-        datasetTrainFull = TCRDataset("../NetTCR/dataNew/Full_train_pretune_mhcX_2.csv", tokenizer, device,excluded_peptide=peplistout, mhctok=mhctok)
-        target_peptidesFinal = peplistout
+
 
     # mhcX = False
     # hideMHC = True
@@ -245,7 +219,7 @@ def main():
 
 
     # Define encoder decoder model
-    model = ED_MultiTransformerModel(encoderA=encoderA,encoderB=encoderB,encoderE=encoderE, decoderA=decoderA, decoderB=decoderB, decoderE=decoderE)
+    model = Tulip(encoderA=encoderA,encoderB=encoderB,encoderE=encoderE, decoderA=decoderA, decoderB=decoderB, decoderE=decoderE)
 
     def count_parameters(mdl):
         return sum(p.numel() for p in mdl.parameters() if p.requires_grad)
@@ -261,10 +235,7 @@ def main():
         model.load_state_dict(checkpoint)
         print("loaded")
 
-    if do_reweight:
-        model.set_reweight()
-    else:
-        model.reweight=False
+
 
 
     model.to(device)
@@ -294,170 +265,14 @@ def main():
         'dropout':  0.1,
         'lr':  args.lr,
         'weight_decay': args.weight_decay,
-        "do_reweight": do_reweight,
-        "reweight_pc":reweight_pc,
-        "mhcX": args.mhcX,
-        "flex":args.flex,
-        "skipMiss":args.skipMiss,
-        "below20":args.below20,
     }
 
-    wandb.init(project="pm53", entity="barthelemymp", config=config_dict)
+    wandb.init(project="PROJECTNAME", entity="YOURWANDBPROFILE", config=config_dict)
     trigger_sync() 
     wandb.config.update(config_dict) 
     trigger_sync() 
 
-    if args.to_track:
-        target_peptidesFinal = np.load(args.to_track)
-    else:
-        target_peptidesFinal = ['GILGFVFTL',
-        'NLVPMVATV',
-        'GLCTLVAML',
-        'ELAGIGILTV',
-        'YLQPRTFLL',
-        'LLWNGPMAV',
-        'CINGVCWTV',
-        'FLYALALLL',
-        'LLYDANYFL',
-        'SLFNTVATLY',
-        'ALWEIQQVV',
-        'RTLNAWVKV',
-        'RLPGVLPRA',
-        'LLFGYPVYV',
-        'LLDFVRFMGV',
-        'FLASKIGRLV',
-        'FLPRVFSAV',
-        'ALSKGVHFV',
-        'FLHVTYVPA',
-        'KLVAMGINAV',
-        'KSVNITFEL',
-        'VMVELVAEL',
-        'CLAVHECFV',
-        'FLLNKEMYL',
-        'RLARLALVL',
-        'AAGIGILTV',
-        'AMQTMLFTM',
-        'YLNDHLEPWI',
-        'RIMTWLDMV',
-        'MMILSDDAV',
-        'FIAGLIAIV',
-        'KVLEYVIKV',
-        'FLNRFTTTL',
-        'YIDIGDYTV',
-        'RLGPVQNEV',
-        'ALYGFVPVL',
-        'KLSYGIATV',
-        'EAAGIGILTV',
-        'CVNGSCFTV',
-        'YMPYFFTLL',
-        'ILGFVFTLT',
-        'WLDMVDTSL',
-        'WLLWPVTLA',
-        'RMFPNAPYL',
-        'TLLFLMSFT',
-        'HLMSFPQSA',
-        'KVYPIILRL',
-        'QVILLNKHI',
-        'VFLVLLPLV',
-        'ALLPGLPAA',
-        'KTWGQYWQV',
-        'SWMESEFRV',
-        'TILTSLLVL',
-        'NLHPDSATL',
-        'KLNEEIAII',
-        'WLTNIFGTV',
-        'LITGRLQSL',
-        'TLMNVITLV',
-        'KLNIKLLGV',
-        'SLPGVFCGV',
-        'SLENVAFNV',
-        'FLALCADSI',
-        'FLIGCNYLG',
-        'YTVSCLPFT',
-        'SACVLAAEC',
-        'ALYYPSARI',
-        'VLLGVKLFGV',
-        'SVLYYQNNV',
-        'YLGGMSYYC',
-        'SLLMPILTL',
-        'YMRSLKVPA',
-        'QMAPISAMV',
-        'KLSALGINAV',
-        'TLEYMDWLV',
-        'IQPGQTFSV',
-        'SMMILSDDA',
-        'RLYLDAYNM',
-        'KLYGLDWAEL',
-        'SGGGETALA',
-        'KLPDDFTGCV',
-        'HMTEVVRHC',
-        'FLAHIQWMV',
-        'NVLTLVYKV',
-        'MLNPNYEDL',
-        'FLNGSCGSV',
-        'LLLTILTSL',
-        'KLIEYTDFA',
-        'MQVESDDYI',
-        'ALNTPKDHI',
-        'ILAYCNKTV',
-        'KIILFLALI',
-        'SLLSVLLSM',
-        'RTIKVFTTV',
-        'KDNVILLNK',
-        'KLWAQCVQL',
-        'MLDLQPETT',
-        'TALALLLLD',
-        'LMWLSYFIA',
-        'LLLEWLAMA',
-        'KLPDDFMGC',
-        'KLFIRQEEV',
-        'YVWKSYVHV',
-        'FLPGVYSVI',
-        'LPDDFMGCV',
-        'NLIDSYFVV',
-        'GLALYYPSA',
-        'VLNDILSRL',
-        'TLIGDCATV',
-        'KQIYKTPPI',
-        'KQLSSNFGA',
-        'NLNCCSVPV',
-        'IMDQVPFSV',
-        'KLQCVDLHV',
-        'CLEASFNYL',
-        'KLQFTSLEI',
-        'YLNTLTLAV',
-        'LLFNKVTLA',
-        'FVAAIFYLI',
-        'RLCAYCCNI',
-        'KLKDCVMYA',
-        'ALDPHSGHFV',
-        'QVVSDIDYV',
-        'YLNSTNVTI',
-        'LMGHFAWWT',
-        'AIFYLITPV',
-        'SLINTLNDL',
-        'AVIKTLQPV',
-        'DLFMRIFTI',
-        'VLWAHGFEL',
-        'KLFEFLVYGV',
-        'RLFARTRSM',
-        'YADVFHLYL',
-        'IMLCCMTSC',
-        'FLLPSLATV',
-        'SMWALVISV',
-        'FTVLCLTPV',
-        'FVVFLLVTL',
-        'DRLNQLESK',
-        'FLCLFLLPS',
-        'SLLMWITQV',
-        'YLLEMLWRL',
-        'TMCDIRQLL',
-        'DQVILLNKH',
-        'YVDNSSLTI',
-        'KMDYFSGQL',
-        'IKLDDKDPQ',
-        'LIDFYLCFL',
-        'YGFQPTNGV']
+
 
     target_peptidesFinal = pd.read_csv(test_path)["peptide"].unique()
 
