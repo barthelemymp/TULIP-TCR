@@ -1,37 +1,19 @@
-
-import numpy as np
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers import pipeline
 import pandas as pd
-import sys
-
-import json
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data._utils.collate import default_collate
-#from data import TranslationDataset
-from transformers import BertTokenizerFast, BertTokenizer
-from transformers import BertModel, BertForMaskedLM, BertConfig, EncoderDecoderModel, BertLMHeadModel, AutoModelForSequenceClassification
-from sklearn.metrics import roc_auc_score
-
-import sys
 import torch
 import torch.utils.data as data
-from torch.nn.utils.rnn import pad_sequence
-import os
-
-
-from transformers.models.bert.modeling_bert import BertPreTrainedModel, BertOnlyMLMHead, SequenceClassifierOutput
 from torch.nn import MSELoss, CrossEntropyLoss, BCEWithLogitsLoss
 from typing import List, Optional, Tuple, Union, Any
-from transformers.modeling_outputs import ModelOutput
+from torch.utils.data._utils.collate import default_collate
+from sklearn.metrics import roc_auc_score
 
-from transformers import PretrainedConfig
-from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
+from transformers import BertModel, PretrainedConfig, AutoModelForCausalLM
+from transformers.models.bert.modeling_bert import BertPreTrainedModel, BertOnlyMLMHead, SequenceClassifierOutput
+from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput, ModelOutput
 from transformers.modeling_utils import PreTrainedModel
-from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
+from transformers.utils import  logging
 from transformers.models.encoder_decoder.configuration_encoder_decoder import EncoderDecoderConfig
 import warnings
 
@@ -41,15 +23,11 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 class TCRDataset(data.Dataset):
-
+    """Custom data.Dataset compatible with data.DataLoader. for TCR data."""
     def __init__(self, csv_file, tokenizer, device, target_binder=None, target_peptide=None, excluded_peptide=None, mhctok=None):#, alpha_maxlength, beta_maxlength, epitope_maxlength):
         self.device=device
         self.tokenizer = tokenizer
-
         print("Loading and Tokenizing the data ...")
-
-        num_inp_lines = 0
-
         df = pd.read_csv(csv_file)
         
         if target_binder:
@@ -63,11 +41,11 @@ class TCRDataset(data.Dataset):
             iii = df["peptide"].apply(lambda x: x in excluded_peptide)
             df = df[~iii]
 
-
         self.alpha = list(df["CDR3a"])
         self.beta = list(df["CDR3b"])
         self.peptide = list(df["peptide"])
         self.binder = list(df["binder"])
+
         if mhctok:
             self.mhctok = mhctok
             self.MHC = list(df["MHC"])
@@ -95,13 +73,10 @@ class TCRDataset(data.Dataset):
 
     def set_reweight(self,alpha):
         freq = self.df["peptide"].value_counts()/self.df["peptide"].value_counts().sum()
-        # df.apply(lambda x: freq[x["peptide"]], 1)
         alpha = alpha
         freq = alpha*freq + (1-alpha)/len(self.df["peptide"].value_counts())
         self.weights = (1/torch.tensor(list(self.df.apply(lambda x: freq[x["peptide"]],1 ))))/len(self.df["peptide"].value_counts())
         self.reweight = True
-
-
 
     def all2allmhc_collate_function(self, batch):
 
@@ -111,10 +86,6 @@ class TCRDataset(data.Dataset):
             (alpha, beta, peptide, binder, mhc) = zip(*batch)
 
         peptide = self.tokenizer(list(peptide),padding="longest", add_special_tokens=True)
-#         print(peptide["input_ids"])
-#         print("coucou")
-#         print(torch.tensor(peptide["input_ids"]))
-        
         peptide = {k: torch.tensor(v).to(self.device) for k, v in peptide.items()}#default_collate(peptide)
         
         beta = self.tokenizer(list(beta),  padding="longest", add_special_tokens=True)
@@ -131,14 +102,7 @@ class TCRDataset(data.Dataset):
             weight = torch.tensor(weight).to(self.device)
             return peptide, alpha, beta, binder, mhc, weight
 
-
-
         return peptide, alpha, beta, binder, mhc
-
-
-
-
-
 
 
 class ClassifCausalLMOutputWithCrossAttentions(ModelOutput):
@@ -162,11 +126,9 @@ class BertLastPooler(nn.Module):
     def forward(self, hidden_states: torch.Tensor, targetind) -> torch.Tensor:
         # We "pool" the model by simply taking the hidden state corresponding
         # to the first token.
-        # print("coucou1",targetind[0], hidden_states[0,targetind[0]])
         ele = torch.arange(0, hidden_states.shape[0])
 
         first_token_tensor = hidden_states[ele.long(), targetind.long()]#.gather(1, targetind.view(-1,1))#hidden_states[:, -1]
-        # print("coucou2", first_token_tensor)
         pooled_output = self.dense(first_token_tensor)
         pooled_output = self.activation(pooled_output)
         return pooled_output
@@ -216,12 +178,6 @@ class ED_BertForSequenceClassification(BertPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
-        r"""
-        labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
-            Labels for computing the sequence classification/regression loss. Indices should be in `[0, ...,
-            config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
-            `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
-        """
         return_dict = True# return_dict if return_dict is not None else self.config.use_return_dict
         if labels is not None:
           use_cache = False
@@ -308,46 +264,6 @@ class ED_BertForSequenceClassification(BertPreTrainedModel):
 
 
 class ED_LMOutput(ModelOutput):
-    """
-    Base class for sequence-to-sequence language models outputs.
-    Args:
-        loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `labels` is provided):
-            Language modeling loss.
-        logits (`torch.FloatTensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
-            Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
-        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-            Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
-            `(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional tensors of shape
-            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
-            Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
-            blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
-        decoder_hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
-            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
-            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
-            Hidden-states of the decoder at the output of each layer plus the initial embedding outputs.
-        decoder_attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
-            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
-            sequence_length)`.
-            Attentions weights of the decoder, after the attention softmax, used to compute the weighted average in the
-            self-attention heads.
-        cross_attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
-            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
-            sequence_length)`.
-            Attentions weights of the decoder's cross-attention layer, after the attention softmax, used to compute the
-            weighted average in the cross-attention heads.
-        encoder_last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
-            Sequence of hidden-states at the output of the last layer of the encoder of the model.
-        encoder_hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
-            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
-            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
-            Hidden-states of the encoder at the output of each layer plus the initial embedding outputs.
-        encoder_attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
-            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
-            sequence_length)`.
-            Attentions weights of the encoder, after the attention softmax, used to compute the weighted average in the
-            self-attention heads.
-    """
-
     clf_loss: Optional[torch.FloatTensor] = None
     clf_logits: Optional[torch.FloatTensor] = None
     decoder_outputsA = None
@@ -359,101 +275,6 @@ class ED_LMOutput(ModelOutput):
 
 
 logger = logging.get_logger(__name__)
-
-_CONFIG_FOR_DOC = "EncoderDecoderConfig"
-
-DEPRECATION_WARNING = (
-    "Version v4.12.0 introduces a better way to train encoder-decoder models by computing the loss inside the"
-    " encoder-decoder framework rather than in the decoder itself. You may observe training discrepancies if"
-    " fine-tuning a model trained with versions anterior to 4.12.0. The decoder_input_ids are now created based on the"
-    " labels, no need to pass them yourself anymore."
-)
-
-ENCODER_DECODER_START_DOCSTRING = r"""
-    This class can be used to initialize a sequence-to-sequence model with any pretrained autoencoding model as the
-    encoder and any pretrained autoregressive model as the decoder. The encoder is loaded via
-    [`~AutoModel.from_pretrained`] function and the decoder is loaded via [`~AutoModelForCausalLM.from_pretrained`]
-    function. Cross-attention layers are automatically added to the decoder and should be fine-tuned on a downstream
-    generative task, like summarization.
-    The effectiveness of initializing sequence-to-sequence models with pretrained checkpoints for sequence generation
-    tasks was shown in [Leveraging Pre-trained Checkpoints for Sequence Generation
-    Tasks](https://arxiv.org/abs/1907.12461) by Sascha Rothe, Shashi Narayan, Aliaksei Severyn. Michael Matena, Yanqi
-    Zhou, Wei Li, Peter J. Liu.
-    After such an Encoder Decoder model has been trained/fine-tuned, it can be saved/loaded just like any other models
-    (see the examples for more information).
-    This model inherits from [`PreTrainedModel`]. Check the superclass documentation for the generic methods the
-    library implements for all its model (such as downloading or saving, resizing the input embeddings, pruning heads
-    etc.)
-    This model is also a PyTorch [torch.nn.Module](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) subclass.
-    Use it as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general usage
-    and behavior.
-    Parameters:
-        config ([`EncoderDecoderConfig`]): Model configuration class with all the parameters of the model.
-            Initializing with a config file does not load the weights associated with the model, only the
-            configuration. Check out the [`~PreTrainedModel.from_pretrained`] method to load the model weights.
-"""
-
-ENCODER_DECODER_INPUTS_DOCSTRING = r"""
-    Args:
-        input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
-            Indices of input sequence tokens in the vocabulary.
-            Indices can be obtained using [`PreTrainedTokenizer`]. See [`PreTrainedTokenizer.encode`] and
-            [`PreTrainedTokenizer.__call__`] for details.
-            [What are input IDs?](../glossary#input-ids)
-        attention_mask (`torch.FloatTensor` of shape `(batch_size, sequence_length)`, *optional*):
-            Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
-            - 1 for tokens that are **not masked**,
-            - 0 for tokens that are **masked**.
-            [What are attention masks?](../glossary#attention-mask)
-        decoder_input_ids (`torch.LongTensor` of shape `(batch_size, target_sequence_length)`, *optional*):
-            Indices of decoder input sequence tokens in the vocabulary.
-            Indices can be obtained using [`PreTrainedTokenizer`]. See [`PreTrainedTokenizer.encode`] and
-            [`PreTrainedTokenizer.__call__`] for details.
-            [What are input IDs?](../glossary#input-ids)
-            If `past_key_values` is used, optionally only the last `decoder_input_ids` have to be input (see
-            `past_key_values`).
-            For training, `decoder_input_ids` are automatically created by the model by shifting the `labels` to the
-            right, replacing -100 by the `pad_token_id` and prepending them with the `decoder_start_token_id`.
-        decoder_attention_mask (`torch.BoolTensor` of shape `(batch_size, target_sequence_length)`, *optional*):
-            Default behavior: generate a tensor that ignores pad tokens in `decoder_input_ids`. Causal mask will also
-            be used by default.
-        encoder_outputs (`tuple(torch.FloatTensor)`, *optional*):
-            This tuple must consist of (`last_hidden_state`, *optional*: `hidden_states`, *optional*: `attentions`)
-            `last_hidden_state` (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`) is a tensor
-            of hidden-states at the output of the last layer of the encoder. Used in the cross-attention of the
-            decoder.
-        past_key_values (`tuple(tuple(torch.FloatTensor))` of length `config.n_layers` with each tuple having 4 tensors of shape `(batch_size, num_heads, sequence_length - 1, embed_size_per_head)`):
-            Contains precomputed key and value hidden states of the attention blocks. Can be used to speed up decoding.
-            If `past_key_values` are used, the user can optionally input only the last `decoder_input_ids` (those that
-            don't have their past key value states given to this model) of shape `(batch_size, 1)` instead of all
-            `decoder_input_ids` of shape `(batch_size, sequence_length)`.
-        inputs_embeds (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
-            Optionally, instead of passing `input_ids` you can choose to directly pass an embedded representation. This
-            is useful if you want more control over how to convert `input_ids` indices into associated vectors than the
-            model's internal embedding lookup matrix.
-        decoder_inputs_embeds (`torch.FloatTensor` of shape `(batch_size, target_sequence_length, hidden_size)`, *optional*):
-            Optionally, instead of passing `decoder_input_ids` you can choose to directly pass an embedded
-            representation. This is useful if you want more control over how to convert `decoder_input_ids` indices
-            into associated vectors than the model's internal embedding lookup matrix.
-        labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
-            Labels for computing the masked language modeling loss for the decoder. Indices should be in `[-100, 0,
-            ..., config.vocab_size]` (see `input_ids` docstring) Tokens with indices set to `-100` are ignored
-            (masked), the loss is only computed for the tokens with labels in `[0, ..., config.vocab_size]`
-        use_cache (`bool`, *optional*):
-            If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding (see
-            `past_key_values`).
-        output_attentions (`bool`, *optional*):
-            Whether or not to return the attentions tensors of all attention layers. See `attentions` under returned
-            tensors for more detail.
-        output_hidden_states (`bool`, *optional*):
-            Whether or not to return the hidden states of all layers. See `hidden_states` under returned tensors for
-            more detail.
-        return_dict (`bool`, *optional*):
-            If set to `True`, the model will return a [`~utils.Seq2SeqLMOutput`] instead of a plain tuple.
-        kwargs (*optional*): Remaining dictionary of keyword arguments. Keyword arguments come in two flavors:
-            - Without a prefix which will be input as `**encoder_kwargs` for the encoder forward function.
-            - With a *decoder_* prefix which will be input as `**decoder_kwargs` for the decoder forward function.
-"""
 
 
 def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int):
@@ -474,15 +295,8 @@ def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start
     return shifted_input_ids
 
 
-# @add_start_docstrings(ENCODER_DECODER_START_DOCSTRING)
-# class Tulip(PreTrainedModel):
+
 class Tulip(PreTrainedModel):
-    r"""
-    [`EncoderDecoderModel`] is a generic model class that will be instantiated as a transformer architecture with one
-    of the base model classes of the library as encoder and another one as decoder when created with the
-    :meth*~transformers.AutoModel.from_pretrained* class method for the encoder and
-    :meth*~transformers.AutoModelForCausalLM.from_pretrained* class method for the decoder.
-    """
     config_class = EncoderDecoderConfig
     #config_class = multiTransConfig
     base_model_prefix = "encoder_decoder"
@@ -565,15 +379,6 @@ class Tulip(PreTrainedModel):
                 f" {self.config.decoder}"
             )
 
-        # make sure that the individual model's config refers to the shared config
-        # so that the updates to the config will be synced
-        # self.encoderA.config = self.config.encoder
-        # self.decoderA.config = self.config.decoder
-        # self.encoderB.config = self.config.encoder
-        # self.decoderB.config = self.config.decoder
-        # self.encoderE.config = self.config.encoder
-        # self.decoderE.config = self.config.decoder
-        # encoder outputs might need to be projected to different dimension for decoder
         if (
             self.encoderA.config.hidden_size != self.decoderA.config.hidden_size
             and self.decoderA.config.cross_attention_hidden_size is None
@@ -585,7 +390,6 @@ class Tulip(PreTrainedModel):
                 f"The encoder {self.encoderA} should not have a LM Head. Please use a model without LM Head"
             )
 
-        # tie encoder, decoder weights if config set accordingly
         self.tie_weights()
 
     def tie_weights(self):
@@ -631,53 +435,7 @@ class Tulip(PreTrainedModel):
         *model_args,
         **kwargs
     ) -> PreTrainedModel:
-        r"""
-        Instantiate an encoder and a decoder from one or two base classes of the library from pretrained model
-        checkpoints.
-        The model is set in evaluation mode by default using `model.eval()` (Dropout modules are deactivated). To train
-        the model, you need to first set it back in training mode with `model.train()`.
-        Params:
-            encoder_pretrained_model_name_or_path (`str`, *optional*):
-                Information necessary to initiate the encoder. Can be either:
-                    - A string, the *model id* of a pretrained model hosted inside a model repo on huggingface.co.
-                      Valid model ids can be located at the root-level, like `bert-base-uncased`, or namespaced under a
-                      user or organization name, like `dbmdz/bert-base-german-cased`.
-                    - A path to a *directory* containing model weights saved using
-                      [`~PreTrainedModel.save_pretrained`], e.g., `./my_model_directory/`.
-                    - A path or url to a *tensorflow index checkpoint file* (e.g, `./tf_model/model.ckpt.index`). In
-                      this case, `from_tf` should be set to `True` and a configuration object should be provided as
-                      `config` argument. This loading path is slower than converting the TensorFlow checkpoint in a
-                      PyTorch model using the provided conversion scripts and loading the PyTorch model afterwards.
-            decoder_pretrained_model_name_or_path (`str`, *optional*, defaults to `None`):
-                Information necessary to initiate the decoder. Can be either:
-                    - A string, the *model id* of a pretrained model hosted inside a model repo on huggingface.co.
-                      Valid model ids can be located at the root-level, like `bert-base-uncased`, or namespaced under a
-                      user or organization name, like `dbmdz/bert-base-german-cased`.
-                    - A path to a *directory* containing model weights saved using
-                      [`~PreTrainedModel.save_pretrained`], e.g., `./my_model_directory/`.
-                    - A path or url to a *tensorflow index checkpoint file* (e.g, `./tf_model/model.ckpt.index`). In
-                      this case, `from_tf` should be set to `True` and a configuration object should be provided as
-                      `config` argument. This loading path is slower than converting the TensorFlow checkpoint in a
-                      PyTorch model using the provided conversion scripts and loading the PyTorch model afterwards.
-            model_args (remaining positional arguments, *optional*):
-                All remaining positional arguments will be passed to the underlying model's `__init__` method.
-            kwargs (remaining dictionary of keyword arguments, *optional*):
-                Can be used to update the configuration object (after it being loaded) and initiate the model (e.g.,
-                `output_attentions=True`).
-                - To update the encoder configuration, use the prefix *encoder_* for each configuration parameter.
-                - To update the decoder configuration, use the prefix *decoder_* for each configuration parameter.
-                - To update the parent model configuration, do not use a prefix for each configuration parameter.
-                Behaves differently depending on whether a `config` is provided or automatically loaded.
-        Example:
-        ```python
-        >>> from transformers import EncoderDecoderModel
-        >>> # initialize a bert2bert from two pretrained BERT models. Note that the cross-attention layers will be randomly initialized
-        >>> model = EncoderDecoderModel.from_encoder_decoder_pretrained("bert-base-uncased", "bert-base-uncased")
-        >>> # saving model after fine-tuning
-        >>> model.save_pretrained("./bert2bert")
-        >>> # load fine-tuned model
-        >>> model = EncoderDecoderModel.from_pretrained("./bert2bert")
-        ```"""
+        
 
         kwargs_encoder = {
             argument[len("encoder_") :]: value for argument, value in kwargs.items() if argument.startswith("encoder_")
@@ -760,8 +518,7 @@ class Tulip(PreTrainedModel):
         config = EncoderDecoderConfig.from_encoder_decoder_configs(encoder.config, decoder.config, **kwargs)
         return cls(encoder=encoder, decoder=decoder, config=config)
 
-    # @add_start_docstrings_to_model_forward(ENCODER_DECODER_INPUTS_DOCSTRING) 
-    # @replace_return_docstrings(output_type=Seq2SeqLMOutput, config_class=_CONFIG_FOR_DOC)
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = (None, None,None),
@@ -1433,16 +1190,13 @@ def unsupervised_auc(model, test_dataloader, ignore_index):
             lossa = LLLoss_raw(predictionsA, alpha_input, ignore_index) 
             lossb = LLLoss_raw(predictionsB, beta_input, ignore_index) 
             losse = LLLoss_raw(predictionsE, peptide_input, ignore_index)
-            # print(lossa.shape, alpha_input.shape, lossb.shape, beta_input.shape, losse.shape )
-            clf_scorea += [lossa[i].cpu().item() for i in range(len(lossa))]
-            clf_scoreb += [lossb[i].cpu().item() for i in range(len(lossb))]
-            clf_scoree += [losse[i].cpu().item() for i in range(len(losse))]
+            clf_scorea += [-1*lossa[i].cpu().item() for i in range(len(lossa))]
+            clf_scoreb += [-1*lossb[i].cpu().item() for i in range(len(lossb))]
+            clf_scoree += [-1*losse[i].cpu().item() for i in range(len(losse))]
 
-        # print(Boolbinders)
-        # print(clf_scoree)
-        auca = roc_auc_score(Boolbinders, -1*clf_scorea)
-        aucb = roc_auc_score(Boolbinders, -1*clf_scoreb)
-        auce = roc_auc_score(Boolbinders, -1*clf_scoree)
+        auca = roc_auc_score(Boolbinders, clf_scorea)
+        aucb = roc_auc_score(Boolbinders, clf_scoreb)
+        auce = roc_auc_score(Boolbinders, clf_scoree)
         return auca, aucb, auce
 
 
