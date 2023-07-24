@@ -1,4 +1,5 @@
 # TULIP-TCR
+Attention: if you cloned the repo the very first days of the biorxiv release, the code has been cleaned since then. please pull. 
 This repo implement the TULIP method for modeling the interaction between peptide and pMHC.
 
 ## src
