@@ -1,3 +1,9 @@
+"""
+This code is mostly a modification of the original code from the hugginface library:
+    https://github.com/huggingface/transformers/blob/main/src/transformers/models/bert/modeling_bert.py
+    https://github.com/huggingface/transformers/blob/main/src/transformers/models/encoder_decoder/modeling_encoder_decoder.py
+"""
+
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -17,17 +23,15 @@ from transformers.utils import  logging
 from transformers.models.encoder_decoder.configuration_encoder_decoder import EncoderDecoderConfig
 import warnings
 
-# model = AutoModelForCausalLM.from_pretrained("lightonai/RITA_s", trust_remote_code=True)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-
 
 class TCRDataset(data.Dataset):
     """Custom data.Dataset compatible with data.DataLoader. for TCR data."""
     def __init__(self, csv_file, tokenizer, device, target_binder=None, target_peptide=None, excluded_peptide=None, mhctok=None):#, alpha_maxlength, beta_maxlength, epitope_maxlength):
         self.device=device
         self.tokenizer = tokenizer
-        print("Loading and Tokenizing the data ...")
+        print("Loading the data ...")
         df = pd.read_csv(csv_file)
         
         if target_binder:
@@ -53,6 +57,10 @@ class TCRDataset(data.Dataset):
         self.reweight=False
 
     def __getitem__(self, offset):
+        """Return one datapoint from the dataset, at position offset in the table.
+            - if reweight is True, will provide a weight for each datapoint.
+            - if mhctok is provided will provide an mhc token for each datapoint.
+        """
         alpha = self.alpha[offset]
         beta = self.beta[offset]
         peptide = self.peptide[offset]
@@ -62,16 +70,14 @@ class TCRDataset(data.Dataset):
             if self.reweight:
                 w = self.weights[offset]
                 return alpha, beta, peptide, binder, mhc, w
-
             return alpha, beta, peptide, binder, mhc
-
-
         return alpha, beta, peptide, binder
 
     def __len__(self):
         return len(self.peptide)
 
     def set_reweight(self,alpha):
+        """Set the weights for each datapoint, based on the frequency of the peptide in the dataset."""
         freq = self.df["peptide"].value_counts()/self.df["peptide"].value_counts().sum()
         alpha = alpha
         freq = alpha*freq + (1-alpha)/len(self.df["peptide"].value_counts())
@@ -79,6 +85,7 @@ class TCRDataset(data.Dataset):
         self.reweight = True
 
     def all2allmhc_collate_function(self, batch):
+        """Collate function for the Tulip model returning peptide, alpha, beta, binder, mhc and weight if reweight is True"""
 
         if self.reweight:
             (alpha, beta, peptide, binder, mhc, weight) = zip(*batch)
@@ -298,7 +305,6 @@ def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start
 
 class Tulip(PreTrainedModel):
     config_class = EncoderDecoderConfig
-    #config_class = multiTransConfig
     base_model_prefix = "encoder_decoder"
 
 
@@ -556,36 +562,7 @@ class Tulip(PreTrainedModel):
         inputs_embedsA=inputs_embeds[0]
         inputs_embedsB=inputs_embeds[1]
         inputs_embedsE=inputs_embeds[2]
-        r"""
-        Returns:
-        Examples:
-        ```python
-        >>> from transformers import EncoderDecoderModel, BertTokenizer
-        >>> import torch
-        >>> tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
-        >>> model = EncoderDecoderModel.from_encoder_decoder_pretrained(
-        ...     "bert-base-uncased", "bert-base-uncased"
-        ... )  # initialize Bert2Bert from pre-trained checkpoints
-        >>> # training
-        >>> model.config.decoder_start_token_id = tokenizer.cls_token_id
-        >>> model.config.pad_token_id = tokenizer.pad_token_id
-        >>> model.config.vocab_size = model.config.decoder.vocab_size
-        >>> input_ids = tokenizer("This is a really long text", return_tensors="pt").input_ids
-        >>> labels = tokenizer("This is the corresponding summary", return_tensors="pt").input_ids
-        >>> outputs = model(input_ids=input_ids, labels=input_ids)
-        >>> loss, logits = outputs.loss, outputs.logits
-        >>> # save and load from pretrained
-        >>> model.save_pretrained("bert2bert")
-        >>> model = EncoderDecoderModel.from_pretrained("bert2bert")
-        >>> # generation
-        >>> generated = model.generate(input_ids)
-        ```"""
-
-
-
-
-
-
+        
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         kwargs_encoder = {argument: value for argument, value in kwargs.items() if not argument.startswith("decoder_")}
@@ -657,15 +634,6 @@ class Tulip(PreTrainedModel):
         ):
             encoder_hidden_statesE = self.enc_to_dec_proj(encoder_hidden_statesE)
 
-        # if (labels is not None) and (decoder_input_ids is None and decoder_inputs_embeds is None):
-        #     decoder_input_ids = shift_tokens_right(
-        #         labels, self.config.pad_token_id, self.config.decoder_start_token_id
-        #     )
-        # print(dict(mhc))
-        # print(type(mhc["input_ids"]))
-        #mhc = default_collate(dict(mhc))
-        # print(mhc["input_ids"])
-        # print(torch.tensor(mhc["input_ids"]))
         mhc_encoded = self.mhc_embeddings(mhc["input_ids"])
         mhc_attention_mask = mhc["attention_mask"]
         # Decode
@@ -810,20 +778,6 @@ class Tulip(PreTrainedModel):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def compute_loss(predictions, targets, criterion):
     """Compute our custom loss"""
     if len(targets)>0:
@@ -933,17 +887,11 @@ def train_unsupervised(model, optimizer, masker, train_dataloader, criterion, al
         alpha_observed_mask = alpha_input.clone().detach()[:,1] != 4
         beta_observed_mask = beta_input.clone().detach()[:,1] != 4
         peptide_observed_mask = peptide_input.clone().detach()[:,1] != 4
-        # lm_labels = alphabeta_output.clone()
         clf_label = binder.clone()
         labels = clf_label
 
         out = model(input_ids=(alpha_input,beta_input,peptide_input), attention_mask=(alpha_mask,beta_mask,peptide_mask),
                                         labels=labels, mhc=mhc)
-
-        loss_clf = out.loss #decoder_outputs.lossCLS
-        lm_lossA = out.decoder_outputsA.lm_loss
-        lm_lossB = out.decoder_outputsB.lm_loss
-        lm_lossE = out.decoder_outputsE.lm_loss
 
         prediction_scoresA = out.decoder_outputsA.lm_logits
         predictionsA = F.log_softmax(prediction_scoresA, dim=2)
@@ -959,17 +907,10 @@ def train_unsupervised(model, optimizer, masker, train_dataloader, criterion, al
         mlm_lossB = MLM_Loss(model.encoderB, model.MLMHeadB, masker, beta_input, beta_mask, beta_observed_mask)
         mlm_lossE = MLM_Loss(model.encoderE, model.MLMHeadE, masker, peptide_input, peptide_mask, peptide_observed_mask)
 
-
-        
         loss = mlm_lossA+mlm_lossB+mlm_lossE+alph*(lossa+lossb+losse)
-        # loss = lossa+lossb+losse
-
         loss.backward()
-        # loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        # print(loss_clf)#model.decoder.pooler.dense.weight)
         optimizer.step()
-        # print(model.decoder.bert.pooler.dense.weight)
         count_A += sum(alpha_observed_mask)
         count_B += sum(beta_observed_mask)
         count_E += sum(peptide_observed_mask)
@@ -1030,10 +971,6 @@ def eval_unsupervised(model, masker, test_dataloader, criterion):
             out = model(input_ids=(alpha_input,beta_input,peptide_input), attention_mask=(alpha_mask,beta_mask,peptide_mask),
                                             labels=labels, mhc=mhc)
 
-            loss_clf = out.loss #decoder_outputs.lossCLS
-            lm_lossA = out.decoder_outputsA.lm_loss
-            lm_lossB = out.decoder_outputsB.lm_loss
-            lm_lossE = out.decoder_outputsE.lm_loss
 
             prediction_scoresA = out.decoder_outputsA.lm_logits
             predictionsA = F.log_softmax(prediction_scoresA, dim=2)
