@@ -1,49 +1,23 @@
 
 import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers import pipeline
 import pandas as pd
-import sys
-
 import json
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data._utils.collate import default_collate
-#from data import TranslationDataset
-from transformers import BertTokenizerFast, BertTokenizer
-from transformers import BertModel, BertForMaskedLM, BertConfig, EncoderDecoderModel, BertLMHeadModel, AutoModelForSequenceClassification
+
+from transformers import BertModel, BertConfig
 from sklearn.metrics import roc_auc_score
 
-import sys
 import torch
-import torch.utils.data as data
-from torch.nn.utils.rnn import pad_sequence
-import os
 
-
-from transformers.models.bert.modeling_bert import BertPreTrainedModel, BertOnlyMLMHead, SequenceClassifierOutput
-from torch.nn import MSELoss, CrossEntropyLoss, BCEWithLogitsLoss
-from typing import List, Optional, Tuple, Union
-from transformers.modeling_outputs import ModelOutput
-
-from transformers import PretrainedConfig
-from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
-from transformers.modeling_utils import PreTrainedModel
-from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from transformers.models.encoder_decoder.configuration_encoder_decoder import EncoderDecoderConfig
-import warnings
-from torch.profiler import profile, record_function, ProfilerActivity
-import wandb
+from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip, get_logscore
 
 import argparse
 
 
-
-from wandb_osh.hooks import TriggerWandbSyncHook
-
-wandb.login()
 
 
 torch.manual_seed(0)
@@ -52,7 +26,7 @@ torch.manual_seed(0)
 
 
 def main():
-    trigger_sync = TriggerWandbSyncHook()
+
     parser = argparse.ArgumentParser()
 
 
@@ -87,14 +61,12 @@ def main():
         help="batch_size" ,
     )
 
-
-
     args = parser.parse_args()
 
     with open(args.modelconfig, "r") as read_file:
         print("loading hyperparameter")
         modelconfig = json.load(read_file)
-        from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip
+
 
 
     torch.manual_seed(0)
@@ -122,8 +94,6 @@ def main():
     if tokenizer.mask_token is None:
         tokenizer.add_special_tokens({'mask_token': '<MASK>'})
 
-
-
     from tokenizers.processors import TemplateProcessing
     tokenizer._tokenizer.post_processor = TemplateProcessing(
         single="<CLS> $A <EOS>",
@@ -140,8 +110,7 @@ def main():
     vocabsize = len(tokenizer._tokenizer.get_vocab())
     mhcvocabsize = len(mhctok._tokenizer.get_vocab())
     print("Loading models ..")
-    # vocabsize = encparams["vocab_size"]
-    max_length = 100
+    max_length = 114
     encoder_config = BertConfig(vocab_size = vocabsize,
                         max_position_embeddings = max_length, # this shuold be some large value
                         num_attention_heads = modelconfig["num_attn_heads"],
@@ -156,23 +125,23 @@ def main():
     encoderB = BertModel(config=encoder_config)
     encoderE = BertModel(config=encoder_config)
 
-    max_length = 100
+    max_length = 50
     decoder_config = BertConfig(vocab_size = vocabsize,
-                        max_position_embeddings = max_length, # this shuold be some large value
+                        max_position_embeddings = max_length, 
                         num_attention_heads = modelconfig["num_attn_heads"],
                         num_hidden_layers = modelconfig["num_hidden_layers"],
                         hidden_size = modelconfig["hidden_size"],
                         type_vocab_size = 1,
                         is_decoder=True, 
-                        pad_token_id =  tokenizer.pad_token_id)    # Very Important
+                        pad_token_id =  tokenizer.pad_token_id)   
     
     decoder_config.add_cross_attention=True
 
-    decoderA = ED_BertForSequenceClassification(config=decoder_config) #BertForMaskedLM
+    decoderA = ED_BertForSequenceClassification(config=decoder_config)
     decoderA.pooler = BertLastPooler(config=decoder_config)
-    decoderB = ED_BertForSequenceClassification(config=decoder_config) #BertForMaskedLM
+    decoderB = ED_BertForSequenceClassification(config=decoder_config) 
     decoderB.pooler = BertLastPooler(config=decoder_config)
-    decoderE = ED_BertForSequenceClassification(config=decoder_config) #BertForMaskedLM
+    decoderE = ED_BertForSequenceClassification(config=decoder_config) 
     decoderE.pooler = BertLastPooler(config=decoder_config)
     # Define encoder decoder model
     model = Tulip(encoderA=encoderA,encoderB=encoderB,encoderE=encoderE, decoderA=decoderA, decoderB=decoderB, decoderE=decoderE)
@@ -196,8 +165,8 @@ def main():
         results = pd.DataFrame(columns=["CDR3a", "CDR3b", "peptide", "rank"])
         datasetPetideSpecific= TCRDataset(test_path, tokenizer, device,target_peptide=target_peptide, mhctok=mhctok)
         print(target_peptide)
-        scores = -1*np.array(get_logproba(datasetPetideSpecific, model, ignore_index =  tokenizer.pad_token_id))
-        ranks = np.argsort(scores)[::-1]
+        scores = -1*np.array(get_logscore(datasetPetideSpecific, model, ignore_index =  tokenizer.pad_token_id))
+        ranks = np.argsort(scores[::-1])
         results["CDR3a"] = datasetPetideSpecific.alpha
         results["CDR3b"] = datasetPetideSpecific.beta
         results["peptide"] = target_peptide
