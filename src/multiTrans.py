@@ -11,7 +11,7 @@ import torch.nn.functional as F
 import torch
 import torch.utils.data as data
 from torch.nn import MSELoss, CrossEntropyLoss, BCEWithLogitsLoss
-from typing import List, Optional, Tuple, Union, Any
+from typing import List, Optional, Tuple, Union, Any, Dict
 from torch.utils.data._utils.collate import default_collate
 from sklearn.metrics import roc_auc_score
 
@@ -142,7 +142,7 @@ class BertLastPooler(nn.Module):
 
 
 
-class ED_BertForSequenceClassification(BertPreTrainedModel):
+class TulipPetal(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
@@ -265,6 +265,21 @@ class ED_BertForSequenceClassification(BertPreTrainedModel):
             attentions=outputs.attentions,
             cross_attentions = outputs.cross_attentions
         )
+    
+
+    def prepare_inputs_for_generation(self, input_ids, past=None, attention_mask=None, **model_kwargs):
+        input_shape = input_ids.shape
+        # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
+        if attention_mask is None:
+            attention_mask = input_ids.new_ones(input_shape)
+
+        # cut decoder_input_ids if past is used
+        if past is not None:
+            input_ids = input_ids[:, -1:]
+
+        return {"input_ids": input_ids, "attention_mask": attention_mask, "past_key_values": past}
+    
+
 
 
 
@@ -372,6 +387,7 @@ class Tulip(PreTrainedModel):
         self.MLMHeadA =  BertOnlyMLMHead(decoderA.config)
         self.MLMHeadB =  BertOnlyMLMHead(decoderB.config)
         self.MLMHeadE =  BertOnlyMLMHead(decoderE.config)
+        # This classifier is only here for potential future supervised task
         self.classifier = nn.Linear(3*decoderA.config.hidden_size, 2)
         self.mhc_embeddings = nn.Embedding(encoderA.config.mhc_vocab_size, encoderA.config.hidden_size)
         if self.encoderA.config.to_dict() != self.config.encoder.to_dict():
@@ -407,20 +423,54 @@ class Tulip(PreTrainedModel):
                 self.encoder, self.decoder._modules[decoder_base_model_prefix], self.decoder.base_model_prefix
             )
 
-    def get_encoder(self):
-        return self.encoder
+    def get_encoder(self, encoder_name='B'):
+        if encoder_name=='A':
+            return self.encoderA
+        elif encoder_name=='B':
+            return self.encoderB
+        elif encoder_name=='E':
+            return self.encoderE
 
-    def get_decoder(self):
-        return self.decoder
 
-    def get_input_embeddings(self):
-        return self.encoder.get_input_embeddings()
+    def get_decoder(self, decoder_name='B'):
+        if decoder_name=='A':
+            return self.decoderA
+        elif decoder_name=='B':
+            return self.decoderB
+        elif decoder_name=='E':
+            return self.decoderE
 
-    def get_output_embeddings(self):
-        return self.decoder.get_output_embeddings()
 
-    def set_output_embeddings(self, new_embeddings):
-        return self.decoder.set_output_embeddings(new_embeddings)
+
+    def get_input_embeddings(self, encoder_name='B'):
+        if encoder_name=='A':
+            return self.encoderA.get_input_embeddings()
+        elif encoder_name=='B':
+            return self.encoderB.get_input_embeddings()
+        elif encoder_name=='E':
+            return self.encoderE.get_input_embeddings()
+        
+
+
+    def get_output_embeddings(self, decoder_name='B'):
+        if decoder_name=='A':
+            return self.decoderA.get_output_embeddings()
+        elif decoder_name=='B':
+            return self.decoderB.get_output_embeddings()
+        elif decoder_name=='E':
+            return self.decoderE.get_output_embeddings()
+        
+
+
+    def set_output_embeddings(self, new_embeddings, decoder_name='B'):
+        if decoder_name=='A':
+            return self.decoderA.set_output_embeddings(new_embeddings)
+        elif decoder_name=='B':
+            return self.decoderB.set_output_embeddings(new_embeddings)
+        elif decoder_name=='E':
+            return self.decoderE.set_output_embeddings(new_embeddings)
+        
+
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
@@ -541,8 +591,10 @@ class Tulip(PreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = (None, None,None),
         mhc=None,
+        togenerate=None,
         **kwargs,
     ) -> Union[Tuple, Seq2SeqLMOutput]:
+        print('forward', input_ids)
         input_idsA=input_ids[0]
         input_idsB=input_ids[1]
         input_idsE=input_ids[2]
@@ -637,61 +689,65 @@ class Tulip(PreTrainedModel):
         mhc_encoded = self.mhc_embeddings(mhc["input_ids"])
         mhc_attention_mask = mhc["attention_mask"]
         # Decode
-        labelsA = (labels, input_idsA)
-        decoder_outputsA = self.decoderA(
-            input_ids = input_idsA,
-            attention_mask = attention_maskA,
-            encoder_hidden_states = torch.cat([mhc_encoded,encoder_hidden_statesB, encoder_hidden_statesE], dim=1),
-            encoder_attention_mask = torch.cat([mhc_attention_mask, attention_maskB, attention_maskE], dim=1),
-            inputs_embeds = inputs_embedsA,
-            output_attentions = output_attentions,
-            output_hidden_states = output_hidden_states,
-            labels=labelsA,
-            use_cache=use_cache,
-            past_key_values=past_key_valuesA,
-            return_dict=return_dict,
-            **kwargs_decoder,
-        )
-        pooled_outputA = decoder_outputsA.pooled_output
+        if togenerate not in ['B','E']:
+            labelsA = (labels, input_idsA)
+            decoder_outputsA = self.decoderA(
+                input_ids = input_idsA,
+                attention_mask = attention_maskA,
+                encoder_hidden_states = torch.cat([mhc_encoded,encoder_hidden_statesB, encoder_hidden_statesE], dim=1),
+                encoder_attention_mask = torch.cat([mhc_attention_mask, attention_maskB, attention_maskE], dim=1),
+                inputs_embeds = inputs_embedsA,
+                output_attentions = output_attentions,
+                output_hidden_states = output_hidden_states,
+                labels=labelsA,
+                use_cache=use_cache,
+                past_key_values=past_key_valuesA,
+                return_dict=return_dict,
+                **kwargs_decoder,
+            )
+            pooled_outputA = decoder_outputsA.pooled_output
 
-        labelsB = (labels, input_idsB)
-        decoder_outputsB = self.decoderB(
-            input_ids = input_idsB,
-            attention_mask = attention_maskB,
-            encoder_hidden_states = torch.cat([mhc_encoded,encoder_hidden_statesA, encoder_hidden_statesE], dim=1),
-            encoder_attention_mask = torch.cat([mhc_attention_mask,attention_maskA, attention_maskE], dim=1),
-            inputs_embeds = inputs_embedsB,
-            output_attentions = output_attentions,
-            output_hidden_states = output_hidden_states,
-            labels=labelsB,
-            use_cache=use_cache,
-            past_key_values=past_key_valuesB,
-            return_dict=return_dict,
-            **kwargs_decoder,
-        )
-        pooled_outputB = decoder_outputsB.pooled_output
+        if togenerate not in ['A','E']:
+            labelsB = (labels, input_idsB)
+            decoder_outputsB = self.decoderB(
+                input_ids = input_idsB,
+                attention_mask = attention_maskB,
+                encoder_hidden_states = torch.cat([mhc_encoded,encoder_hidden_statesA, encoder_hidden_statesE], dim=1),
+                encoder_attention_mask = torch.cat([mhc_attention_mask,attention_maskA, attention_maskE], dim=1),
+                inputs_embeds = inputs_embedsB,
+                output_attentions = output_attentions,
+                output_hidden_states = output_hidden_states,
+                labels=labelsB,
+                use_cache=use_cache,
+                past_key_values=past_key_valuesB,
+                return_dict=return_dict,
+                **kwargs_decoder,
+            )
+            pooled_outputB = decoder_outputsB.pooled_output
 
-        labelsE = (labels, input_idsE)
-        decoder_outputsE = self.decoderE(
-            input_ids = input_idsE,
-            attention_mask = attention_maskE,
-            encoder_hidden_states = torch.cat([mhc_encoded,encoder_hidden_statesA, encoder_hidden_statesB], dim=1),
-            encoder_attention_mask = torch.cat([mhc_attention_mask,attention_maskA, attention_maskB], dim=1),
-            inputs_embeds = inputs_embedsE,
-            output_attentions = output_attentions,
-            output_hidden_states = output_hidden_states,
-            labels=labelsE,
-            use_cache=use_cache,
-            past_key_values=past_key_valuesE,
-            return_dict=return_dict,
-            **kwargs_decoder,
-        )
-        pooled_outputE= decoder_outputsE.pooled_output
+        if togenerate not in ['A','B']:
+            labelsE = (labels, input_idsE)
+            decoder_outputsE = self.decoderE(
+                input_ids = input_idsE,
+                attention_mask = attention_maskE,
+                encoder_hidden_states = torch.cat([mhc_encoded,encoder_hidden_statesA, encoder_hidden_statesB], dim=1),
+                encoder_attention_mask = torch.cat([mhc_attention_mask,attention_maskA, attention_maskB], dim=1),
+                inputs_embeds = inputs_embedsE,
+                output_attentions = output_attentions,
+                output_hidden_states = output_hidden_states,
+                labels=labelsE,
+                use_cache=use_cache,
+                past_key_values=past_key_valuesE,
+                return_dict=return_dict,
+                **kwargs_decoder,
+            )
+            pooled_outputE= decoder_outputsE.pooled_output
 
-        pooled_output = torch.cat([pooled_outputA,pooled_outputB,pooled_outputE], dim=1)
-        logits = self.classifier(pooled_output)
+        # pooled_output = torch.cat([pooled_outputA,pooled_outputB,pooled_outputE], dim=1)
+        # logits = self.classifier(pooled_output)
         labelsCLS = labels
         lossCLS = None
+        logits = None
         if labelsCLS is not None:
             if self.config.problem_type is None:
                 if self.num_labels == 1:
@@ -724,41 +780,115 @@ class Tulip(PreTrainedModel):
         # Compute loss independent from decoder (as some shift the logits inside them)
         loss = None
 
-        if not return_dict:
-            if loss is not None:
-                return (loss,) + decoder_outputs + encoder_outputs
-            else:
-                return decoder_outputs + encoder_outputs
+        if togenerate == 'A':
+            return Seq2SeqLMOutput(
+                loss=loss,
+                logits=decoder_outputsA.lm_logits,
+                past_key_values=decoder_outputsA.past_key_values,
+                decoder_hidden_states=decoder_outputsA.hidden_states,
+                decoder_attentions=decoder_outputsA.attentions,
+                cross_attentions=decoder_outputsA.cross_attentions,
+                encoder_last_hidden_state=torch.cat([mhc_encoded,encoder_hidden_statesB, encoder_hidden_statesE], dim=1),
+                encoder_hidden_states=encoder_outputsE.hidden_states,
+                encoder_attentions=torch.cat([mhc_attention_mask, attention_maskB, attention_maskE], dim=1),
+            )
+        elif togenerate == 'B':
+            return Seq2SeqLMOutput(
+                loss=loss,
+                logits=decoder_outputsB.lm_logits,
+                past_key_values=decoder_outputsB.past_key_values,
+                decoder_hidden_states=decoder_outputsB.hidden_states,
+                decoder_attentions=decoder_outputsB.attentions,
+                cross_attentions=decoder_outputsB.cross_attentions,
+                encoder_last_hidden_state=torch.cat([mhc_encoded,encoder_hidden_statesA, encoder_hidden_statesE], dim=1),
+                encoder_hidden_states=encoder_outputsE.hidden_states,
+                encoder_attentions=torch.cat([mhc_attention_mask,attention_maskA, attention_maskE], dim=1),
+            )
+        elif togenerate == 'E':
+            return Seq2SeqLMOutput(
+                loss=loss,
+                logits=decoder_outputsE.lm_logits,
+                past_key_values=decoder_outputsE.past_key_values,
+                decoder_hidden_states=decoder_outputsE.hidden_states,
+                decoder_attentions=decoder_outputsE.attentions,
+                cross_attentions=decoder_outputsE.cross_attentions,
+                encoder_last_hidden_state=torch.cat([mhc_encoded,encoder_hidden_statesA, encoder_hidden_statesB], dim=1),
+                encoder_hidden_states=encoder_outputsE.hidden_states,
+                encoder_attentions=torch.cat([mhc_attention_mask,attention_maskA, attention_maskB], dim=1),
+            )
+        
 
-        return ED_LMOutput(
-            loss = lossCLS,
-            clf_logits=logits,
-            encoder_outputsA = encoder_outputsA,
-            decoder_outputsA = decoder_outputsA,
-            encoder_outputsB = encoder_outputsB,
-            decoder_outputsB = decoder_outputsB,
-            encoder_outputsE = encoder_outputsE,
-            decoder_outputsE = decoder_outputsE,
-        )
+        # if not return_dict:
+        #     if loss is not None:
+        #         return (loss,) + decoder_outputs + encoder_outputs
+        #     else:
+        #         return decoder_outputs + encoder_outputs
+        else:
+            return ED_LMOutput(
+                loss = lossCLS,
+                clf_logits=logits,
+                encoder_outputsA = encoder_outputsA,
+                decoder_outputsA = decoder_outputsA,
+                encoder_outputsB = encoder_outputsB,
+                decoder_outputsB = decoder_outputsB,
+                encoder_outputsE = encoder_outputsE,
+                decoder_outputsE = decoder_outputsE,
+            )
 
 
     def prepare_decoder_input_ids_from_labels(self, labels: torch.Tensor):
+        print('prepare_decoder_input_ids_from_labels')
         return shift_tokens_right(labels, self.config.pad_token_id, self.config.decoder_start_token_id)
 
     def prepare_inputs_for_generation(
-        self, input_ids, past=None, attention_mask=None, use_cache=None, encoder_outputs=None, **kwargs
+        self, input_ids, past=None, attention_mask=(None, None, None), use_cache=None, encoder_outputs=(None, None, None), **kwargs
     ):
-        decoder_inputs = self.decoder.prepare_inputs_for_generation(input_ids, past=past)
-        decoder_attention_mask = decoder_inputs["attention_mask"] if "attention_mask" in decoder_inputs else None
-        input_dict = {
-            "attention_mask": attention_mask,
-            "decoder_attention_mask": decoder_attention_mask,
-            "decoder_input_ids": decoder_inputs["input_ids"],
-            "encoder_outputs": encoder_outputs,
-            "past_key_values": decoder_inputs["past_key_values"],
-            "use_cache": use_cache,
-        }
-        return input_dict
+        print('prepare_inputs_for_generation')
+        togenerate = kwargs['togenerate']
+        if togenerate == 'A':
+            decoder_inputs = self.decoderA.prepare_inputs_for_generation(input_ids, past=past)
+            decoder_attention_mask = decoder_inputs["attention_mask"] if "attention_mask" in decoder_inputs else None
+            input_dict = {
+                "input_ids": (decoder_inputs["input_ids"], None, None),
+                "attention_mask": attention_mask,
+                "decoder_attention_mask": (decoder_attention_mask,None,None),
+                "decoder_input_ids": decoder_inputs["input_ids"],
+                "encoder_outputs": encoder_outputs,
+                "past_key_values": (decoder_inputs["past_key_values"], None, None),
+                "use_cache": use_cache,
+                "mhc": kwargs['mhc'],
+            }
+            return input_dict
+        elif togenerate == 'B':
+            decoder_inputs = self.decoderB.prepare_inputs_for_generation(input_ids, past=past)
+            decoder_attention_mask = decoder_inputs["attention_mask"] if "attention_mask" in decoder_inputs else None
+            input_dict = {
+                "input_ids": (None,decoder_inputs["input_ids"], None),
+                "attention_mask": attention_mask,
+                "decoder_attention_mask": (None,decoder_attention_mask,None),
+                "decoder_input_ids": decoder_inputs["input_ids"],
+                "encoder_outputs": encoder_outputs,
+                "past_key_values": (None, decoder_inputs["past_key_values"], None),
+                "use_cache": use_cache,
+                "mhc": kwargs['mhc'],
+            }
+            return input_dict
+        elif togenerate == 'E':
+            decoder_inputs = self.decoderE.prepare_inputs_for_generation(input_ids, past=past)
+            decoder_attention_mask = decoder_inputs["attention_mask"] if "attention_mask" in decoder_inputs else None
+            input_dict = {
+                "input_ids": (None,None,decoder_inputs["input_ids"]),
+                "attention_mask": attention_mask,
+                "decoder_attention_mask": (None,None,decoder_attention_mask),
+                "decoder_input_ids": decoder_inputs["input_ids"],
+                "encoder_outputs": encoder_outputs,
+                "past_key_values": (None, None,  decoder_inputs["past_key_values"]),
+                "use_cache": use_cache,
+                "mhc": kwargs['mhc'],
+            }
+            return input_dict
+        else:
+            raise ValueError('togenerate should be A, B or E')
 
     def resize_token_embeddings(self, *args, **kwargs):
         raise NotImplementedError(
@@ -775,8 +905,183 @@ class Tulip(PreTrainedModel):
     def set_reweight(self):
         self.reweight = True
 
+    
+    def _prepare_model_inputs(
+        self,
+        inputs: Optional[torch.Tensor] = None,
+        bos_token_id: Optional[int] = None,
+        model_kwargs: Optional[Dict[str, torch.Tensor]] = None,
+    ) -> Tuple[torch.Tensor, Optional[str], Dict[str, torch.Tensor]]:
+        """
+        This function extracts the model-specific `inputs` for generation.
+        """
+        print('_prepare_model_inputs')
+
+        # 1. retrieve all kwargs that are non-None or non-model input related.
+        # some encoder-decoder models have different names for model and encoder
+        # if (
+        #     self.config.is_encoder_decoder
+        #     and hasattr(self, "encoder")
+        #     and self.encoder.main_input_name != self.main_input_name
+        # ):
+        #     input_name = self.encoder.main_input_name
+        # else:
+        #     input_name = self.main_input_name
 
 
+        input_name = "input_ids"
+        model_kwargs = {k: v for k, v in model_kwargs.items() if v is not None or k != input_name}
+
+        # 2. check whether model_input_name is passed as kwarg
+        # if yes and `inputs` is None use kwarg inputs
+        # inputs_kwarg = model_kwargs.pop(input_name, None)
+        # if inputs_kwarg is not None and inputs is not None:
+        #     raise ValueError(
+        #         f"`inputs`: {inputs}` were passed alongside "
+        #         f"{input_name} which is not allowed."
+        #         f"Make sure to either pass {inputs} or {input_name}=..."
+        #     )
+        # elif inputs_kwarg is not None:
+        #     inputs = inputs_kwarg
+
+        # # 3. models with `input_ids` can also make use of `inputs_embeds`
+        # if self._can_retrieve_inputs_from_name(inputs, "inputs_embeds", model_kwargs):
+        #     inputs, input_name = model_kwargs["inputs_embeds"], "inputs_embeds"
+
+        # 4. Only encoder-decoder models can have non `input_ids` input format
+        # if not self.config.is_encoder_decoder and input_name != "input_ids":
+        #     raise ValueError(
+        #         f"If {input_name} is passed as model-specific keyword "
+        #         "input then model has to be an encoder-decoder and not a "
+        #         f"{self.__class__.__name__}."
+        #     )
+
+        # 5. if `inputs` is still None, try to create `input_ids` from BOS token
+        if inputs is None:
+            inputs = torch.ones((1,1), dtype=torch.long, device=device) * bos_token_id
+            # self._prepare_input_ids_for_generation(bos_token_id, model_kwargs.get("encoder_outputs"))
+
+        return inputs, input_name, model_kwargs
+
+    def _prepare_encoder_decoder_kwargs_for_generation(
+        self, inputs_tensor: torch.Tensor, model_kwargs, model_input_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        # 1. get encoder
+        # encoder = self.get_encoder()
+
+        # 2. prepare encoder args and encoder kwargs from model kwargs
+        # irrelevant_prefix = ["decoder_", "cross_attn", "use_cache"]
+        # encoder_kwargs = {
+        #     argument: value
+        #     for argument, value in model_kwargs.items()
+        #     if not any(argument.startswith(p) for p in irrelevant_prefix)
+        # }
+
+        print('_prepare_encoder_decoder_kwargs_for_generation', inputs_tensor)
+        encoder_kwargs = model_kwargs.copy()
+        encoder_kwargs["togenerate"] = None
+
+        # 3. make sure that encoder returns `ModelOutput`
+        model_input_name = model_input_name if model_input_name is not None else self.main_input_name
+        encoder_kwargs["return_dict"] = True
+        # encoder_kwargs[model_input_name] = inputs_tensor
+        # model_kwargs["encoder_outputs"]: ModelOutput 
+        out = self.forward(**encoder_kwargs)
+        model_kwargs["encoder_outputs"] = (out.encoder_outputsA, out.encoder_outputsB, out.encoder_outputsE)
+        model_kwargs["decoder_input_ids"] = inputs_tensor
+        model_kwargs.pop("input_ids", None) #### WHY?
+        return model_kwargs
+
+
+    @staticmethod
+    def _update_model_kwargs_for_generation(
+        outputs: ModelOutput, model_kwargs: Dict[str, Any], is_encoder_decoder: bool = False
+    ) -> Dict[str, Any]:
+        print('_update_model_kwargs_for_generation')
+        # update past
+        if "past_key_values" in outputs:
+            model_kwargs["past"] = outputs.past_key_values
+        elif "mems" in outputs:
+            model_kwargs["past"] = outputs.mems
+        elif "past_buckets_states" in outputs:
+            model_kwargs["past"] = outputs.past_buckets_states
+        else:
+            model_kwargs["past"] = None
+
+        # update token_type_ids with last value
+        if "token_type_ids" in model_kwargs:
+            token_type_ids = model_kwargs["token_type_ids"]
+            model_kwargs["token_type_ids"] = torch.cat([token_type_ids, token_type_ids[:, -1].unsqueeze(-1)], dim=-1)
+
+        # update attention mask
+        if not is_encoder_decoder:
+            if "attention_mask" in model_kwargs:
+                attention_mask = model_kwargs["attention_mask"]
+                model_kwargs["attention_mask"] = torch.cat(
+                    [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1
+                )
+
+        return model_kwargs
+    
+
+    def _prepare_decoder_input_ids_for_generation(
+        self,
+        batch_size: int,
+        decoder_start_token_id: int = None,
+        bos_token_id: int = None,
+        model_kwargs: Optional[Dict[str, torch.Tensor]] = None,
+        device: torch.device = None,
+    ) -> torch.LongTensor:
+        print('_prepare_decoder_input_ids_for_generation')
+        if model_kwargs is not None and "decoder_input_ids" in model_kwargs:
+            return model_kwargs.pop("decoder_input_ids")
+        else:
+            decoder_start_token_id = self._get_decoder_start_token_id(decoder_start_token_id, bos_token_id)
+            if device is None:
+                device = self.device
+            return torch.ones((batch_size, 1), dtype=torch.long, device=device) * decoder_start_token_id
+
+
+    @staticmethod
+    def _expand_inputs_for_generation(
+        input_ids: torch.LongTensor,
+        expand_size: int = 1,
+        is_encoder_decoder: bool = False,
+        attention_mask: Optional[torch.LongTensor] = (None,None,None),
+        encoder_outputs: Optional[Tuple[ModelOutput]] = None,
+        **model_kwargs,
+    ) -> Tuple[torch.LongTensor, Dict[str, Any]]:
+        print('_expand_inputs_for_generation')
+        expanded_return_idx = (
+            torch.arange(input_ids.shape[0]).view(-1, 1).repeat(1, expand_size).view(-1).to(input_ids.device)
+        )
+        input_ids = input_ids.index_select(0, expanded_return_idx)
+        model_kwargs["mhc"]["input_ids"] = model_kwargs["mhc"]["input_ids"].index_select(0, expanded_return_idx)
+        model_kwargs["mhc"]["attention_mask"] = model_kwargs["mhc"]["attention_mask"].index_select(0, expanded_return_idx)
+        if "token_type_ids" in model_kwargs:
+            token_type_ids = model_kwargs["token_type_ids"]
+            model_kwargs["token_type_ids"] = token_type_ids.index_select(0, expanded_return_idx)
+
+        if attention_mask is not None:
+            model_kwargs["attention_mask"] = (attention_mask[0].index_select(0, expanded_return_idx),
+                                                attention_mask[1].index_select(0, expanded_return_idx),
+                                                attention_mask[2].index_select(0, expanded_return_idx))
+        
+
+        if is_encoder_decoder:
+            if encoder_outputs == (None,None,None):
+                raise ValueError("If `is_encoder_decoder` is True, make sure that `encoder_outputs` is defined.")
+            encoder_outputs[0]["last_hidden_state"] = encoder_outputs[0].last_hidden_state.index_select(
+                0, expanded_return_idx.to(encoder_outputs[0].last_hidden_state.device)
+            )
+            encoder_outputs[1]["last_hidden_state"] = encoder_outputs[1].last_hidden_state.index_select(
+                0, expanded_return_idx.to(encoder_outputs[1].last_hidden_state.device)
+            )
+            encoder_outputs[2]["last_hidden_state"] = encoder_outputs[2].last_hidden_state.index_select(
+                0, expanded_return_idx.to(encoder_outputs[2].last_hidden_state.device)
+            )
+            model_kwargs["encoder_outputs"] = encoder_outputs
+        return input_ids, model_kwargs
 
 def compute_loss(predictions, targets, criterion):
     """Compute our custom loss"""
