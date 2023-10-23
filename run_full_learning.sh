@@ -47,9 +47,7 @@ set -x
  
 # Pour la partition "gpu_p5", le code doit etre compile avec les modules compatibles
 # Execution du code
-python full_learning.py --train_dir ../NetTCR/dataNew/Full_train_pretune_mhcX_2.csv \
-                        --test_dir ../NetTCR/dataNew/VDJ_test_2.csv \
+python full_learning.py --train_dir ../mydatapath/dataNew/Full_train_pretune_mhcX_2.csv \
+                        --test_dir ../mydatapath/dataNew/VDJ_test_2.csv \
                         --modelconfig configs/shallow.config.json \
-                        --save multiTCR_s_flex \
-                        --flex \
-                        --mhcX
+                        --save multiTCR_s_flex
