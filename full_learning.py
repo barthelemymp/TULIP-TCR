@@ -247,8 +247,10 @@ def main():
 
     datasetTrainFull = TCRDataset(train_path, tokenizer, device, mhctok=mhctok)
     train_dataloaderFull = torch.utils.data.DataLoader(dataset=datasetTrainFull, batch_size=args.batch_size, shuffle=True, collate_fn=datasetTrainFull.all2allmhc_collate_function) 
-    datasetValidFinal = TCRDataset(test_path, tokenizer, device,target_binder=False, mhctok=mhctok)
+    datasetValidFinal = TCRDataset(test_path, tokenizer, device, mhctok=mhctok)
     valid_dataloaderFinal = torch.utils.data.DataLoader(dataset=datasetValidFinal, batch_size=args.batch_size, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
+    datasetValidFinal_true = TCRDataset(test_path, tokenizer, target_binder=1 device, mhctok=mhctok)
+    valid_dataloaderFinal_true = torch.utils.data.DataLoader(dataset=datasetValidFinal_true, batch_size=args.batch_size, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
 
 
     #valid_dataloaderFull = torch.utils.data.DataLoader(dataset=datasetValidFull, batch_size=1, shuffle=True, collate_fn=datasetValidFull.all2allmhc_collate_function) 
@@ -312,7 +314,7 @@ def main():
         trigger_sync() 
         if epoch%10==0:
             with  torch.no_grad():
-                epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE = eval_unsupervised(model, masker, valid_dataloaderFinal, criterion)
+                epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE = eval_unsupervised(model, masker, valid_dataloaderFinal_true, criterion)
                 print(epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE)
                 auca, aucb, auce = unsupervised_auc(model, valid_dataloaderFinal, tokenizer.pad_token_id)
                 wandb.log({"epoch_lm_lossAu_val": epoch_lm_lossA, "epoch_lm_lossBu_val":epoch_lm_lossB ,"epoch_lm_lossEu_val":epoch_lm_lossE ,"epoch_mlm_lossAu_val":epoch_mlm_lossA ,"epoch_mlm_lossBu_val":epoch_mlm_lossB ,"epoch_mlm_lossEu_val":epoch_mlm_lossE,"auca":auca, "aucb":aucb, "auce":auce, "epochT":epoch})
