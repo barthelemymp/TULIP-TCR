@@ -162,7 +162,7 @@ def main():
     target_peptidesFinal = pd.read_csv(test_path)["peptide"].unique()
 
     for target_peptide in target_peptidesFinal:
-        results = pd.DataFrame(columns=["CDR3a", "CDR3b", "peptide", "rank"])
+        results = pd.DataFrame(columns=["CDR3a", "CDR3b", "peptide", "score", "rank"])
         datasetPetideSpecific= TCRDataset(test_path, tokenizer, device,target_peptide=target_peptide, mhctok=mhctok)
         print(target_peptide)
         scores = -1*np.array(get_logscore(datasetPetideSpecific, model, ignore_index =  tokenizer.pad_token_id))
@@ -171,6 +171,7 @@ def main():
         results["CDR3b"] = datasetPetideSpecific.beta
         results["peptide"] = target_peptide
         results["rank"] = ranks
+        results["score"] = scores
         results.to_csv(args.save + target_peptide+".csv")
 
 
