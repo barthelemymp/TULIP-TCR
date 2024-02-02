@@ -221,7 +221,7 @@
     },
     {
       "id": 25,
-      "content": "B",
+      "content": "U",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -231,15 +231,6 @@
     {
       "id": 26,
       "content": "O",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": true,
-      "special": false
-    },
-    {
-      "id": 25,
-      "content": "U",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -263,6 +254,15 @@
       "rstrip": false,
       "normalized": false,
       "special": true
+    },
+    {
+      "id": 29,
+      "content": "B",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": true,
+      "special": false
     }
   ],
   "normalizer": {

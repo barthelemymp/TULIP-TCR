@@ -1,0 +1,11 @@
+{
+    "num_attn_heads_encoder_cdr": 2,
+    "num_hidden_layers_encoder_cdr": 3,
+    "num_attn_heads_decoder_cdr": 2,
+    "num_hidden_layers_decoder_cdr": 3,
+    "num_attn_heads_encoder_pep": 1,
+    "num_hidden_layers_encoder_pep": 2,
+    "num_attn_heads_decoder_pep": 1,
+    "num_hidden_layers_decoder_pep": 2,
+    "hidden_size": 254
+}
