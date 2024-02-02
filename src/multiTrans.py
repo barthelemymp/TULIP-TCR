@@ -22,9 +22,79 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import  logging
 from transformers.models.encoder_decoder.configuration_encoder_decoder import EncoderDecoderConfig
 import warnings
-
+import copy
+import numpy as np
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+from transformers.generation.logits_process import LogitsProcessor, LogitsProcessorList
+# from transformers.generation.logits_process import (
+#     EncoderNoRepeatNGramLogitsProcessor,
+#     EncoderRepetitionPenaltyLogitsProcessor,
+#     EpsilonLogitsWarper,
+#     EtaLogitsWarper,
+#     ExponentialDecayLengthPenalty,
+#     ForcedBOSTokenLogitsProcessor,
+#     ForcedEOSTokenLogitsProcessor,
+#     ForceTokensLogitsProcessor,
+#     HammingDiversityLogitsProcessor,
+#     InfNanRemoveLogitsProcessor,
+#     LogitNormalization,
+#     LogitsProcessorList,
+#     MinLengthLogitsProcessor,
+#     MinNewTokensLengthLogitsProcessor,
+#     NoBadWordsLogitsProcessor,
+#     NoRepeatNGramLogitsProcessor,
+#     PrefixConstrainedLogitsProcessor,
+#     RepetitionPenaltyLogitsProcessor,
+#     SequenceBiasLogitsProcessor,
+#     SuppressTokensAtBeginLogitsProcessor,
+#     SuppressTokensLogitsProcessor,
+#     TemperatureLogitsWarper,
+#     TopKLogitsWarper,
+#     TopPLogitsWarper,
+#     TypicalLogitsWarper,
+#     UnbatchedClassifierFreeGuidanceLogitsProcessor,
+# )
     
+    
+def generate_negative(df, neg_per_pos=5):
+    epit = df["peptide"].unique()
+    epitope_A = {epitope:df[df["peptide"]==epitope]["CDR3a"].unique() for epitope in epit}
+    epitope_B = {epitope:df[df["peptide"]==epitope]["CDR3b"].unique() for epitope in epit}
+    df2 = pd.DataFrame(columns =['CDR3b' ,'CDR3a', "peptide", "binder"])
+    for i in range(len(df)):
+        neg = 0
+        row = df.loc[i]
+        while neg < neg_per_pos:
+            s = df.sample(n=1).iloc[0]
+
+            if s["peptide"] != row["peptide"]:
+                if (s["CDR3a"] == None) & (s["CDR3b"] == None):
+                    continue
+                elif s["CDR3a"] == None:
+                    if s["CDR3b"] in epitope_B[row["peptide"]]:
+                        continue
+
+                elif s["CDR3b"] == None:
+                    if s["CDR3a"] in epitope_A[row["peptide"]]:
+                        continue
+
+                else:
+                    if s["CDR3a"] in epitope_A[row["peptide"]]:
+                        continue
+                    elif s["CDR3b"] in epitope_B[row["peptide"]]:
+                        continue
+                    else:
+                        # new_row = {"peptide":row["peptide"],"CDR3a":s["CDR3a"],"CDR3b":s["CDR3b"], "binder":0, "MHC":row["MHC"]},
+                        # Create a new DataFrame with the data you want to append
+                        new_data = pd.DataFrame([{"peptide": row["peptide"], "CDR3a": s["CDR3a"], "CDR3b": s["CDR3b"], "binder": 0, "MHC": row["MHC"]}])
+
+                    # Use pandas.concat to concatenate the new_data DataFrame to df2
+                        df2 = pd.concat([df2, new_data], ignore_index=True)
+
+                        # df2 = pd.concat({"peptide":row["peptide"],"CDR3a":s["CDR3a"],"CDR3b":s["CDR3b"], "binder":0, "MHC":row["MHC"]}, ignore_index=True)
+                        neg = neg+1
+    return df2
+
 
 class TCRDataset(data.Dataset):
     """Custom data.Dataset compatible with data.DataLoader. for TCR data."""
@@ -55,6 +125,168 @@ class TCRDataset(data.Dataset):
             self.MHC = list(df["MHC"])
         self.df = df
         self.reweight=False
+        self.chain_masking_proba=0.0
+
+    @classmethod
+    def empty_init(cls, tokenizer, device, mhctok=None ):
+        obj = cls.__new__(cls)  # Does not call __init__
+        super(TCRDataset, obj).__init__()  # Don't forget to call any polymorphic base class initializers
+        obj.device=device
+        obj.tokenizer = tokenizer
+        obj.mhctok = mhctok
+        obj.MHC = []
+        obj.alpha = []
+        obj.beta = []
+        obj.peptide = []
+        obj.binder = []
+        obj.reweight=False
+        obj.chain_masking_proba=0.0
+        return obj
+
+    def generate_unconditional_data(self, mask_alpha=True, mask_beta=True, mask_peptide=True, mask_mhc=False):
+        new = self.__class__.empty_init(self.tokenizer, self.device, self.mhctok)
+        for i in range(len(self)):
+            if mask_alpha:
+                alpha = '<MIS>'
+            else:
+                alpha = self.alpha[i]
+            if mask_beta:
+                beta = '<MIS>'
+            else:
+                beta = self.beta[i]
+            if mask_peptide:
+                peptide = '<MIS>'
+            else:
+                peptide = self.peptide[i]
+            if mask_mhc:
+                mhc = '<MIS>' 
+            else:
+                mhc = self.MHC[i]
+            new.append(MHC=mhc, alpha=alpha, beta=beta, peptide=peptide, binder=self.binder[i])   
+
+                # new.append(MHC=self.MHC[i], alpha=self.alpha[i], beta=self.beta[i], peptide=self.peptide[i], binder=self.binder[i])
+        return new
+    
+
+
+
+    def append(self, MHC='<MIS>', alpha='<MIS>', beta='<MIS>', peptide='<MIS>', binder=0):
+        self.MHC.append(MHC)
+        self.alpha.append(alpha)
+        self.beta.append(beta)
+        self.peptide.append(peptide)
+        self.binder.append(binder)
+
+    def concatenate(self, tcrdata, inplace = True):
+        if inplace: 
+            self.MHC += tcrdata.MHC
+            self.alpha += tcrdata.alpha
+            self.beta += tcrdata.beta
+            self.peptide += tcrdata.peptide
+            self.binder += tcrdata.binder
+        else:
+            new = copy.deepcopy(self)
+            new.MHC += tcrdata.MHC
+            new.alpha += tcrdata.alpha
+            new.beta += tcrdata.beta
+            new.peptide += tcrdata.peptide
+            new.binder += tcrdata.binder
+            return new
+
+    def to_pandas(self):
+        return pd.DataFrame({"MHC":self.MHC, "CDR3a":self.alpha, "CDR3b":self.beta, "peptide":self.peptide, "binder":self.binder})
+    
+    def select_binder(self, target_binder=1):
+        new = self.__class__.empty_init(self.tokenizer, self.device, self.mhctok)
+        for i in range(len(self)):
+            if self.binder[i] == target_binder:
+                new.append(MHC=self.MHC[i], alpha=self.alpha[i], beta=self.beta[i], peptide=self.peptide[i], binder=self.binder[i])
+        return new
+    
+    def select_peptide(self, target_peptide ):
+        new = self.__class__.empty_init(self.tokenizer, self.device, self.mhctok)
+        for i in range(len(self)):
+            if self.peptide[i] in target_peptide:
+                new.append(MHC=self.MHC[i], alpha=self.alpha[i], beta=self.beta[i], peptide=self.peptide[i], binder=self.binder[i])
+        return new
+    
+    def select_chain(self, target_chain:str='both'):
+        """
+        target_chain: 'both', 'alpha', 'beta'
+
+        """
+        new = self.__class__.empty_init(self.tokenizer, self.device, self.mhctok)
+        if target_chain == 'both':
+            for i in range(len(self)):
+                if self.alpha[i] == '<MIS>':
+                    continue
+                if self.beta[i]== '<MIS>':
+                    continue
+                else:
+                    new.append(MHC=self.MHC[i], alpha=self.alpha[i], beta=self.beta[i], peptide=self.peptide[i], binder=self.binder[i])
+            return new
+        if target_chain == 'alpha':
+            for i in range(len(self)):
+                if self.alpha[i] == '<MIS>':
+                    continue
+                else:
+                    new.append(MHC=self.MHC[i], alpha=self.alpha[i], beta=self.beta[i], peptide=self.peptide[i], binder=self.binder[i])
+            return new
+        if target_chain == 'beta':
+            for i in range(len(self)):
+                if self.beta[i]== '<MIS>':
+                    continue
+                else:
+                    new.append(MHC=self.MHC[i], alpha=self.alpha[i], beta=self.beta[i], peptide=self.peptide[i], binder=self.binder[i])
+            return new
+
+    
+    def filter_peptide(self, target_peptide):
+        new = self.__class__.empty_init(self.tokenizer, self.device, self.mhctok)
+        for i in range(len(self)):
+            if self.peptide[i] not in target_peptide:
+                new.append(MHC=self.MHC[i], alpha=self.alpha[i], beta=self.beta[i], peptide=self.peptide[i], binder=self.binder[i])
+        return new
+    
+    @classmethod
+    def from_pandas(cls, df, tokenizer, device, mhctok=None):
+        obj = cls.__new__(cls)  # Does not call __init__
+        super(TCRDataset, obj).__init__()
+        obj.device=device
+        obj.tokenizer = tokenizer
+        obj.mhctok = mhctok
+
+        obj.alpha = list(df["CDR3a"])
+        obj.beta = list(df["CDR3b"])
+        obj.peptide = list(df["peptide"])
+        obj.binder = list(df["binder"])
+
+        if mhctok:
+            obj.mhctok = mhctok
+            obj.MHC = list(df["MHC"])
+        obj.df = df
+        obj.reweight=False
+        obj.chain_masking_proba=0.0
+
+        return obj
+    
+    def set_chain_masking_proba(self, proba=0.0):
+        self.chain_masking_proba = proba
+
+    
+    def generate_negatives(self, neg_per_pos=5):
+        """
+        Generate negative data by randomly sampling from the dataset. 
+        For every positive datapoint, we resample the TCRs among tcrs not binding the same epitope until we have neg_per_pos negative datapoints.
+        Inplace.
+        """
+        df = self.to_pandas()
+        df = df[df["binder"]==1]
+        df2 = generate_negative(df, neg_per_pos=neg_per_pos)
+        for i in range(len(df2)):
+            row = df2.iloc[i]
+            self.append(MHC=row["MHC"], alpha=row["CDR3a"], beta=row["CDR3b"], peptide=row["peptide"], binder=row["binder"])
+
 
     def __getitem__(self, offset):
         """Return one datapoint from the dataset, at position offset in the table.
@@ -65,11 +297,22 @@ class TCRDataset(data.Dataset):
         beta = self.beta[offset]
         peptide = self.peptide[offset]
         binder = self.binder[offset]
+        if self.chain_masking_proba > 0.0:
+            if alpha != '<MIS>' and beta != '<MIS>':
+                rd = np.random.uniform()
+                if rd < self.chain_masking_proba/2:
+                    alpha = '<MIS>'
+                elif rd < self.chain_masking_proba:
+                    beta = '<MIS>'
+            if alpha != '<MIS>' or beta != '<MIS>':
+                rd = np.random.uniform()
+                if rd < self.chain_masking_proba/2:
+                    peptide = '<MIS>'
         if self.mhctok:
             mhc = self.MHC[offset]
-            if self.reweight:
-                w = self.weights[offset]
-                return alpha, beta, peptide, binder, mhc, w
+            # if self.reweight:
+            #     w = self.weights[offset]
+            #     return alpha, beta, peptide, binder, mhc, w
             return alpha, beta, peptide, binder, mhc
         return alpha, beta, peptide, binder
 
@@ -110,6 +353,251 @@ class TCRDataset(data.Dataset):
             return peptide, alpha, beta, binder, mhc, weight
 
         return peptide, alpha, beta, binder, mhc
+
+
+# def _get_logits_processor(
+#     self,
+#     generation_config: GenerationConfig,
+#     input_ids_seq_length: int,
+#     encoder_input_ids: torch.LongTensor,
+#     prefix_allowed_tokens_fn: Callable[[int, torch.Tensor], List[int]],
+#     logits_processor: Optional[LogitsProcessorList],
+#     model_kwargs: Optional[Dict[str, Any]] = None,
+#     negative_prompt_ids: Optional[torch.Tensor] = None,
+#     negative_prompt_attention_mask: Optional[torch.Tensor] = None,
+# ) -> LogitsProcessorList:
+#     """
+#     This class returns a [`LogitsProcessorList`] list object that contains all relevant [`LogitsProcessor`]
+#     instances used to modify the scores of the language model head.
+#     """
+#     # instantiate processors list
+#     processors = LogitsProcessorList()
+
+#     if generation_config.guidance_scale is not None and generation_config.guidance_scale != 1:
+#         processors.append(
+#             UnbatchedClassifierFreeGuidanceLogitsProcessor(
+#                 generation_config.guidance_scale,
+#                 self,
+#                 unconditional_ids=negative_prompt_ids,
+#                 unconditional_attention_mask=negative_prompt_attention_mask,
+#                 use_cache=model_kwargs["use_cache"],
+#             )
+#         )
+#     if generation_config.sequence_bias is not None:
+#         processors.append(SequenceBiasLogitsProcessor(sequence_bias=generation_config.sequence_bias))
+
+#     if generation_config.diversity_penalty is not None and generation_config.diversity_penalty > 0.0:
+#         processors.append(
+#             HammingDiversityLogitsProcessor(
+#                 diversity_penalty=generation_config.diversity_penalty,
+#                 num_beams=generation_config.num_beams,
+#                 num_beam_groups=generation_config.num_beam_groups,
+#             )
+#         )
+#     if (
+#         generation_config.encoder_repetition_penalty is not None
+#         and generation_config.encoder_repetition_penalty != 1.0
+#     ):
+#         processors.append(
+#             EncoderRepetitionPenaltyLogitsProcessor(
+#                 penalty=generation_config.encoder_repetition_penalty, encoder_input_ids=encoder_input_ids
+#             )
+#         )
+#     if generation_config.repetition_penalty is not None and generation_config.repetition_penalty != 1.0:
+#         processors.append(RepetitionPenaltyLogitsProcessor(penalty=generation_config.repetition_penalty))
+#     if generation_config.no_repeat_ngram_size is not None and generation_config.no_repeat_ngram_size > 0:
+#         processors.append(NoRepeatNGramLogitsProcessor(generation_config.no_repeat_ngram_size))
+#     if (
+#         generation_config.encoder_no_repeat_ngram_size is not None
+#         and generation_config.encoder_no_repeat_ngram_size > 0
+#     ):
+#         if self.config.is_encoder_decoder:
+#             processors.append(
+#                 EncoderNoRepeatNGramLogitsProcessor(
+#                     generation_config.encoder_no_repeat_ngram_size, encoder_input_ids
+#                 )
+#             )
+#         else:
+#             raise ValueError(
+#                 "It's impossible to use `encoder_no_repeat_ngram_size` with decoder-only architecture"
+#             )
+#     if generation_config.bad_words_ids is not None:
+#         processors.append(
+#             NoBadWordsLogitsProcessor(generation_config.bad_words_ids, generation_config.eos_token_id)
+#         )
+#     if (
+#         generation_config.min_length is not None
+#         and generation_config.eos_token_id is not None
+#         and generation_config.min_length > 0
+#     ):
+#         processors.append(MinLengthLogitsProcessor(generation_config.min_length, generation_config.eos_token_id))
+#     if (
+#         generation_config.min_new_tokens is not None
+#         and generation_config.eos_token_id is not None
+#         and generation_config.min_new_tokens > 0
+#     ):
+#         processors.append(
+#             MinNewTokensLengthLogitsProcessor(
+#                 input_ids_seq_length, generation_config.min_new_tokens, generation_config.eos_token_id
+#             )
+#         )
+#     if prefix_allowed_tokens_fn is not None:
+#         processors.append(
+#             PrefixConstrainedLogitsProcessor(
+#                 prefix_allowed_tokens_fn, generation_config.num_beams // generation_config.num_beam_groups
+#             )
+#         )
+#     if generation_config.forced_bos_token_id is not None:
+#         processors.append(ForcedBOSTokenLogitsProcessor(generation_config.forced_bos_token_id))
+#     if generation_config.forced_eos_token_id is not None:
+#         processors.append(
+#             ForcedEOSTokenLogitsProcessor(generation_config.max_length, generation_config.forced_eos_token_id)
+#         )
+#     if generation_config.remove_invalid_values is True:
+#         processors.append(InfNanRemoveLogitsProcessor())
+#     if generation_config.exponential_decay_length_penalty is not None:
+#         processors.append(
+#             ExponentialDecayLengthPenalty(
+#                 generation_config.exponential_decay_length_penalty,
+#                 generation_config.eos_token_id,
+#                 input_ids_seq_length,
+#             )
+#         )
+#     if generation_config.suppress_tokens is not None:
+#         processors.append(SuppressTokensLogitsProcessor(generation_config.suppress_tokens))
+#     if generation_config.begin_suppress_tokens is not None:
+#         begin_index = input_ids_seq_length
+#         begin_index = (
+#             begin_index
+#             if (input_ids_seq_length > 1 or generation_config.forced_bos_token_id is None)
+#             else begin_index + 1
+#         )
+#         if generation_config.forced_decoder_ids is not None:
+#             # generation starts after the last token that is forced
+#             begin_index += generation_config.forced_decoder_ids[-1][0]
+#         processors.append(
+#             SuppressTokensAtBeginLogitsProcessor(generation_config.begin_suppress_tokens, begin_index)
+#         )
+#     if generation_config.forced_decoder_ids is not None:
+#         processors.append(ForceTokensLogitsProcessor(generation_config.forced_decoder_ids))
+#     processors = self._merge_criteria_processor_list(processors, logits_processor)
+#     # `LogitNormalization` should always be the last logit processor, when present
+#     if generation_config.renormalize_logits is True:
+#         processors.append(LogitNormalization())
+#     return processors
+
+
+class TulipFreeGuidanceLogitsProcessor(LogitsProcessor):
+    def __init__(
+        self,
+        guidance_scale: float,
+        model,
+        mask_alpha = True, 
+        mask_beta = True,
+        mask_peptide = True,
+        mask_mhc = False,
+        starting_dataset = None,
+        bs = None,
+        togenerate = 'B',
+        # unconditional_ids: Optional[torch.LongTensor] = None,
+        # unconditional_attention_mask: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = False,
+    ):
+        self.guidance_scale = guidance_scale
+        self.model = model
+        if starting_dataset is None and bs is None:
+            raise ValueError("Either starting_dataset or bs must be provided")
+        # if starting_dataset is not None:
+        unconditional_dataset = starting_dataset.generate_unconditional_data(mask_alpha=mask_alpha, mask_beta=mask_beta, mask_peptide=mask_peptide, mask_mhc=mask_mhc)
+        unconditional_dataloader = data.DataLoader(unconditional_dataset, batch_size=len(unconditional_dataset), shuffle=False, collate_fn=unconditional_dataset.all2allmhc_collate_function)
+        self.unconditional_batch = next(iter(unconditional_dataloader))
+        peptide, alpha, beta, binder, mhc = self.unconditional_batch
+        peptide_input = peptide['input_ids']
+        peptide_mask= peptide["attention_mask"]
+        peptide_tokentype = peptide['token_type_ids']
+        alpha_input = alpha['input_ids']
+        alpha_mask = alpha["attention_mask"]
+        alpha_tokentype = alpha['token_type_ids']
+        beta_input = beta['input_ids']
+        beta_mask = beta["attention_mask"]
+        beta_tokentype = beta['token_type_ids']
+
+        model_kwargs = {}
+        model_kwargs["input_ids"] = (alpha_input, beta_input, peptide_input)
+        model_kwargs["attention_mask"] = (alpha_mask, beta_mask, peptide_mask)
+        model_kwargs["mhc"] = mhc
+        model_kwargs["togenerate"] = togenerate
+        model_kwargs["use_cache"] = False
+
+
+        self.unconditional_model_kwargs= copy.deepcopy(model_kwargs)
+        self.first_pass = True
+
+
+
+
+
+        # self.unconditional_context = {
+        #     "input_ids": unconditional_ids,
+        #     "attention_mask": unconditional_attention_mask,
+        #     "use_cache": use_cache,
+        #     "past_key_values": None,
+        #     "first_pass": True,
+        # }
+        # self.unconditional_context["input_ids"] = None
+
+    def get_unconditional_logits(self, input_ids):
+        if self.first_pass:
+            # if self.unconditional_context["input_ids"] is None:
+            #     self.unconditional_context["input_ids"] = input_ids[:, -1:]
+            # if self.unconditional_context["attention_mask"] is None:
+            #     self.unconditional_context["attention_mask"] = torch.ones_like(
+            #         self.unconditional_context["input_ids"], dtype=torch.long
+            #     )
+            # input_ids = self.unconditional_context["input_ids"]
+            # attention_mask = self.unconditional_context["attention_mask"]
+
+            self.unconditional_model_kwargs = self.model._prepare_encoder_decoder_kwargs_for_generation(input_ids, self.unconditional_model_kwargs, model_input_name= None)
+            self.first_pass= False
+
+        # else:
+            # attention_mask = torch.cat(
+            #     [
+            #         self.unconditional_context["attention_mask"],
+            #         torch.ones_like(input_ids[:, -1:], dtype=torch.long),
+            #     ],
+            #     dim=1,
+            # )
+            # if not self.unconditional_context["use_cache"]:
+            #     input_ids = torch.cat([self.unconditional_context["input_ids"], input_ids[:, -1:]], dim=1)
+            # else:
+            #     input_ids = input_ids[:, -1:]
+            # self.unconditional_context["input_ids"] = input_ids
+            # self.unconditional_context["attention_mask"] = attention_mask
+
+        model_inputs = self.model.prepare_inputs_for_generation(input_ids, **self.unconditional_model_kwargs)
+
+        out = self.model(
+                **model_inputs
+        )
+        # self.unconditional_context["past_key_values"] = out.get("past_key_values", None)
+
+        return out.logits
+
+    def __call__(self, input_ids, scores):
+        scores = torch.nn.functional.log_softmax(scores, dim=-1)
+        if self.guidance_scale == 1:
+            return scores
+
+        logits = self.get_unconditional_logits(input_ids)
+
+        unconditional_logits = torch.nn.functional.log_softmax(logits[:, -1], dim=-1)
+
+
+        out = self.guidance_scale * (scores - unconditional_logits) + unconditional_logits
+        
+        return out
+
 
 
 class ClassifCausalLMOutputWithCrossAttentions(ModelOutput):
@@ -191,9 +679,8 @@ class TulipPetal(BertPreTrainedModel):
 
         # get clfPosition:
         temp = input_ids != self.pad_token_id
+        # print('temp', temp)
         targetind  = torch.sum(temp, dim=1) - 1
-
-
 
         outputs = self.bert(
             input_ids,
@@ -387,6 +874,13 @@ class Tulip(PreTrainedModel):
         self.MLMHeadA =  BertOnlyMLMHead(decoderA.config)
         self.MLMHeadB =  BertOnlyMLMHead(decoderB.config)
         self.MLMHeadE =  BertOnlyMLMHead(decoderE.config)
+
+
+        # Miss Mask Implemetation
+        self.skipMiss = True
+        self.MissA = nn.Parameter(torch.zeros((1,encoderA.config.hidden_size)), requires_grad=True)
+        self.MissB = nn.Parameter(torch.zeros((1,encoderB.config.hidden_size)), requires_grad=True)
+        self.MissE = nn.Parameter(torch.zeros((1,encoderE.config.hidden_size)), requires_grad=True)
         # This classifier is only here for potential future supervised task
         self.classifier = nn.Linear(3*decoderA.config.hidden_size, 2)
         self.mhc_embeddings = nn.Embedding(encoderA.config.mhc_vocab_size, encoderA.config.hidden_size)
@@ -594,10 +1088,31 @@ class Tulip(PreTrainedModel):
         togenerate=None,
         **kwargs,
     ) -> Union[Tuple, Seq2SeqLMOutput]:
-        print('forward', input_ids)
+        # print('forward', input_ids)
         input_idsA=input_ids[0]
         input_idsB=input_ids[1]
         input_idsE=input_ids[2]
+
+
+        # Miss mask Implementation
+        # To Do replace hard coded 3 and 4 with bos and miss token ids
+        if self.skipMiss:
+            if input_idsA!= None:
+                if input_idsA.shape[1] == 1:
+                    MissMaskA = input_idsA.clone().detach()[:,0] != 3
+                else:
+                    MissMaskA = input_idsA.clone().detach()[:,1] == 4
+            if input_idsB!= None:
+                if input_idsB.shape[1] == 1:
+                    MissMaskB = input_idsB.clone().detach()[:,0] != 3
+                else:
+                    MissMaskB = input_idsB.clone().detach()[:,1] == 4
+
+            if input_idsE!= None:
+                if input_idsE.shape[1] == 1:
+                    MissMaskE = input_idsE.clone().detach()[:,0] != 3
+                else:
+                    MissMaskE = input_idsE.clone().detach()[:,1] == 4
         
         attention_maskA=attention_mask[0]
         attention_maskB=attention_mask[1]
@@ -668,6 +1183,28 @@ class Tulip(PreTrainedModel):
         encoder_hidden_statesB = encoder_outputsB[0]
         encoder_hidden_statesE = encoder_outputsE[0]
         # optionally project encoder_hidden_states
+
+
+        # Miss mask Implementation
+        if self.skipMiss:
+            if input_idsA != None:
+                encoder_hidden_statesA = encoder_hidden_statesA.clone()
+                encoder_hidden_statesA[MissMaskA,0,:] = self.MissA
+                encoder_hidden_statesA[MissMaskA,1,:] = self.MissA
+                encoder_hidden_statesA[MissMaskA,2,:] = self.MissA
+            if input_idsB != None:
+                encoder_hidden_statesB = encoder_hidden_statesB.clone()
+                encoder_hidden_statesB[MissMaskB,0,:] = self.MissB
+                encoder_hidden_statesB[MissMaskB,1,:] = self.MissB
+                encoder_hidden_statesB[MissMaskB,2,:] = self.MissB
+            if input_idsE != None:
+                encoder_hidden_statesE = encoder_hidden_statesE.clone()
+                encoder_hidden_statesE[MissMaskE,0,:] = self.MissE
+                encoder_hidden_statesE[MissMaskE,1,:] = self.MissE
+                encoder_hidden_statesE[MissMaskE,2,:] = self.MissE
+
+
+
         if (
             self.encoderA.config.hidden_size != self.decoderA.config.hidden_size
             and self.decoderA.config.cross_attention_hidden_size is None
@@ -745,34 +1282,35 @@ class Tulip(PreTrainedModel):
 
         # pooled_output = torch.cat([pooled_outputA,pooled_outputB,pooled_outputE], dim=1)
         # logits = self.classifier(pooled_output)
-        labelsCLS = labels
+        # labelsCLS = labels
+        # print('labelsCLS', labelsCLS)
         lossCLS = None
         logits = None
-        if labelsCLS is not None:
-            if self.config.problem_type is None:
-                if self.num_labels == 1:
-                    self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (labelsCLS.dtype == torch.long or labelsCLS.dtype == torch.int):
-                    self.config.problem_type = "single_label_classification"
-                else:
-                    self.config.problem_type = "multi_label_classification"
+        # if labelsCLS is not None:
+        #     if self.config.problem_type is None:
+        #         if self.num_labels == 1:
+        #             self.config.problem_type = "regression"
+        #         elif self.num_labels > 1 and (labelsCLS.dtype == torch.long or labelsCLS.dtype == torch.int):
+        #             self.config.problem_type = "single_label_classification"
+        #         else:
+        #             self.config.problem_type = "multi_label_classification"
 
-            if self.config.problem_type == "regression":
-                loss_fct = MSELoss()
-                if self.num_labels == 1:
-                    lossCLS = loss_fct(logits.squeeze(), labelsCLS.squeeze())
-                else:
-                    lossCLS = loss_fct(logits, labelsCLS)
-            elif self.config.problem_type == "single_label_classification":
-                if self.reweight == True:
-                    loss_fct = CrossEntropyLoss(reduction="none")
-                    lossCLS = loss_fct(logits.view(-1, self.num_labels), labelsCLS.view(-1))
-                else:
-                    loss_fct = CrossEntropyLoss()
-                    lossCLS = loss_fct(logits.view(-1, self.num_labels), labelsCLS.view(-1))
-            elif self.config.problem_type == "multi_label_classification":
-                loss_fct = BCEWithLogitsLoss()
-                lossCLS = loss_fct(logits, labelsCLS)
+        #     if self.config.problem_type == "regression":
+        #         loss_fct = MSELoss()
+        #         if self.num_labels == 1:
+        #             lossCLS = loss_fct(logits.squeeze(), labelsCLS.squeeze())
+        #         else:
+        #             lossCLS = loss_fct(logits, labelsCLS)
+        #     elif self.config.problem_type == "single_label_classification":
+        #         if self.reweight == True:
+        #             loss_fct = CrossEntropyLoss(reduction="none")
+        #             lossCLS = loss_fct(logits.view(-1, self.num_labels), labelsCLS.view(-1))
+        #         else:
+        #             loss_fct = CrossEntropyLoss()
+        #             lossCLS = loss_fct(logits.view(-1, self.num_labels), labelsCLS.view(-1))
+        #     elif self.config.problem_type == "multi_label_classification":
+        #         loss_fct = BCEWithLogitsLoss()
+        #         lossCLS = loss_fct(logits, labelsCLS)
 
 
 
@@ -837,25 +1375,25 @@ class Tulip(PreTrainedModel):
 
 
     def prepare_decoder_input_ids_from_labels(self, labels: torch.Tensor):
-        print('prepare_decoder_input_ids_from_labels')
+        # print('prepare_decoder_input_ids_from_labels')
         return shift_tokens_right(labels, self.config.pad_token_id, self.config.decoder_start_token_id)
 
     def prepare_inputs_for_generation(
         self, input_ids, past=None, attention_mask=(None, None, None), use_cache=None, encoder_outputs=(None, None, None), **kwargs
     ):
-        print('prepare_inputs_for_generation')
+
+        # print('prepare_inputs_for_generation')
         togenerate = kwargs['togenerate']
         if togenerate == 'A':
             decoder_inputs = self.decoderA.prepare_inputs_for_generation(input_ids, past=past)
             decoder_attention_mask = decoder_inputs["attention_mask"] if "attention_mask" in decoder_inputs else None
             input_dict = {
                 "input_ids": (decoder_inputs["input_ids"], None, None),
-                "attention_mask": attention_mask,
-                "decoder_attention_mask": (decoder_attention_mask,None,None),
-                "decoder_input_ids": decoder_inputs["input_ids"],
+                "attention_mask": (decoder_attention_mask,attention_mask[1],attention_mask[2]),
                 "encoder_outputs": encoder_outputs,
                 "past_key_values": (decoder_inputs["past_key_values"], None, None),
                 "use_cache": use_cache,
+                "togenerate": togenerate,
                 "mhc": kwargs['mhc'],
             }
             return input_dict
@@ -864,12 +1402,11 @@ class Tulip(PreTrainedModel):
             decoder_attention_mask = decoder_inputs["attention_mask"] if "attention_mask" in decoder_inputs else None
             input_dict = {
                 "input_ids": (None,decoder_inputs["input_ids"], None),
-                "attention_mask": attention_mask,
-                "decoder_attention_mask": (None,decoder_attention_mask,None),
-                "decoder_input_ids": decoder_inputs["input_ids"],
+                "attention_mask": (attention_mask[0],decoder_attention_mask,attention_mask[2]),
                 "encoder_outputs": encoder_outputs,
                 "past_key_values": (None, decoder_inputs["past_key_values"], None),
                 "use_cache": use_cache,
+                "togenerate": togenerate,
                 "mhc": kwargs['mhc'],
             }
             return input_dict
@@ -878,12 +1415,11 @@ class Tulip(PreTrainedModel):
             decoder_attention_mask = decoder_inputs["attention_mask"] if "attention_mask" in decoder_inputs else None
             input_dict = {
                 "input_ids": (None,None,decoder_inputs["input_ids"]),
-                "attention_mask": attention_mask,
-                "decoder_attention_mask": (None,None,decoder_attention_mask),
-                "decoder_input_ids": decoder_inputs["input_ids"],
+                "attention_mask": (attention_mask[0],attention_mask[1],decoder_attention_mask),
                 "encoder_outputs": encoder_outputs,
                 "past_key_values": (None, None,  decoder_inputs["past_key_values"]),
                 "use_cache": use_cache,
+                "togenerate": togenerate,
                 "mhc": kwargs['mhc'],
             }
             return input_dict
@@ -915,7 +1451,7 @@ class Tulip(PreTrainedModel):
         """
         This function extracts the model-specific `inputs` for generation.
         """
-        print('_prepare_model_inputs')
+        # print('_prepare_model_inputs')
 
         # 1. retrieve all kwargs that are non-None or non-model input related.
         # some encoder-decoder models have different names for model and encoder
@@ -930,7 +1466,7 @@ class Tulip(PreTrainedModel):
 
 
         input_name = "input_ids"
-        model_kwargs = {k: v for k, v in model_kwargs.items() if v is not None or k != input_name}
+        model_kwargs = {k: v for k, v in model_kwargs.items() if v is not None or k != input_name} #WHYYYYY
 
         # 2. check whether model_input_name is passed as kwarg
         # if yes and `inputs` is None use kwarg inputs
@@ -958,9 +1494,11 @@ class Tulip(PreTrainedModel):
 
         # 5. if `inputs` is still None, try to create `input_ids` from BOS token
         if inputs is None:
-            inputs = torch.ones((1,1), dtype=torch.long, device=device) * bos_token_id
+            bs = model_kwargs["input_ids"][0].shape[0]
+            inputs = torch.ones((bs,1), dtype=torch.long, device=device) * bos_token_id
             # self._prepare_input_ids_for_generation(bos_token_id, model_kwargs.get("encoder_outputs"))
 
+        # print('_prepare_model_inputs', inputs, input_name, model_kwargs)
         return inputs, input_name, model_kwargs
 
     def _prepare_encoder_decoder_kwargs_for_generation(
@@ -977,7 +1515,8 @@ class Tulip(PreTrainedModel):
         #     if not any(argument.startswith(p) for p in irrelevant_prefix)
         # }
 
-        print('_prepare_encoder_decoder_kwargs_for_generation', inputs_tensor)
+        # print('_prepare_encoder_decoder_kwargs_for_generation', inputs_tensor)
+
         encoder_kwargs = model_kwargs.copy()
         encoder_kwargs["togenerate"] = None
 
@@ -988,8 +1527,9 @@ class Tulip(PreTrainedModel):
         # model_kwargs["encoder_outputs"]: ModelOutput 
         out = self.forward(**encoder_kwargs)
         model_kwargs["encoder_outputs"] = (out.encoder_outputsA, out.encoder_outputsB, out.encoder_outputsE)
-        model_kwargs["decoder_input_ids"] = inputs_tensor
+        model_kwargs["decoder_input_ids"] = inputs_tensor  #### Not NEEDED?
         model_kwargs.pop("input_ids", None) #### WHY?
+
         return model_kwargs
 
 
@@ -997,7 +1537,7 @@ class Tulip(PreTrainedModel):
     def _update_model_kwargs_for_generation(
         outputs: ModelOutput, model_kwargs: Dict[str, Any], is_encoder_decoder: bool = False
     ) -> Dict[str, Any]:
-        print('_update_model_kwargs_for_generation')
+        # print('_update_model_kwargs_for_generation')
         # update past
         if "past_key_values" in outputs:
             model_kwargs["past"] = outputs.past_key_values
@@ -1024,22 +1564,69 @@ class Tulip(PreTrainedModel):
         return model_kwargs
     
 
+    # def _prepare_decoder_input_ids_for_generation(
+    #     self,
+    #     batch_size: int,
+    #     model_input_name: str,
+    #     decoder_start_token_id: int = None,
+    #     bos_token_id: int = None,
+    #     model_kwargs: Optional[Dict[str, torch.Tensor]] = None,
+    #     device: torch.device = None,
+    # ) -> torch.LongTensor:
+    #     # print('_prepare_decoder_input_ids_for_generation')
+    #     if model_kwargs is not None and "decoder_input_ids" in model_kwargs:
+    #         # print('decoder_input_idsc is in model_kwargs', model_kwargs["decoder_input_ids"])
+    #         return model_kwargs.pop("decoder_input_ids")
+    #     else:
+    #         decoder_start_token_id = self._get_decoder_start_token_id(decoder_start_token_id, bos_token_id)
+    #         if device is None:
+    #             device = self.device
+    #         # print('decoder_start_token_id is not in', torch.ones((batch_size, 1), dtype=torch.long, device=device) * decoder_start_token_id)
+    #         return torch.ones((batch_size, 1), dtype=torch.long, device=device) * decoder_start_token_id
     def _prepare_decoder_input_ids_for_generation(
         self,
         batch_size: int,
+        model_input_name: str,
+        model_kwargs: Dict[str, torch.Tensor],
         decoder_start_token_id: int = None,
         bos_token_id: int = None,
-        model_kwargs: Optional[Dict[str, torch.Tensor]] = None,
         device: torch.device = None,
-    ) -> torch.LongTensor:
-        print('_prepare_decoder_input_ids_for_generation')
+    ) -> Tuple[torch.LongTensor, Dict[str, torch.Tensor]]:
+        """Prepares `decoder_input_ids` for generation with encoder-decoder models"""
+        # 1. Check whether the user has defined `decoder_input_ids` manually. To facilitate in terms of input naming,
+        # we also allow the user to pass it under `input_ids`, if the encoder does not use it as the main input.
         if model_kwargs is not None and "decoder_input_ids" in model_kwargs:
-            return model_kwargs.pop("decoder_input_ids")
+            decoder_input_ids = model_kwargs.pop("decoder_input_ids")
+        elif "input_ids" in model_kwargs and model_input_name != "input_ids":
+            decoder_input_ids = model_kwargs.pop("input_ids")
         else:
-            decoder_start_token_id = self._get_decoder_start_token_id(decoder_start_token_id, bos_token_id)
-            if device is None:
-                device = self.device
-            return torch.ones((batch_size, 1), dtype=torch.long, device=device) * decoder_start_token_id
+            decoder_input_ids = None
+
+        # 2. Encoder-decoder models expect the `decoder_input_ids` to start with a special token. Let's ensure that.
+        decoder_start_token_id = self._get_decoder_start_token_id(decoder_start_token_id, bos_token_id)
+        if device is None:
+            device = self.device
+        decoder_input_ids_start = torch.ones((batch_size, 1), dtype=torch.long, device=device) * decoder_start_token_id
+
+        # no user input -> use decoder_start_token_id as decoder_input_ids
+        if decoder_input_ids is None:
+            decoder_input_ids = decoder_input_ids_start
+        # exception: Donut checkpoints have task-specific decoder starts and don't expect a BOS token
+        elif self.config.model_type == "vision-encoder-decoder" and "donut" in self.name_or_path.lower():
+            pass
+        # user input but doesn't start with decoder_start_token_id -> prepend decoder_start_token_id (and adjust
+        # decoder_attention_mask if provided)
+        elif (decoder_input_ids[:, 0] != decoder_start_token_id).all().item():
+            decoder_input_ids = torch.cat([decoder_input_ids_start, decoder_input_ids], dim=-1)
+            if "decoder_attention_mask" in model_kwargs:
+                decoder_attention_mask = model_kwargs["decoder_attention_mask"]
+                decoder_attention_mask = torch.cat(
+                    (torch.ones_like(decoder_attention_mask)[:, :1], decoder_attention_mask),
+                    dim=-1,
+                )
+                model_kwargs["decoder_attention_mask"] = decoder_attention_mask
+
+        return decoder_input_ids, model_kwargs
 
 
     @staticmethod
@@ -1051,7 +1638,7 @@ class Tulip(PreTrainedModel):
         encoder_outputs: Optional[Tuple[ModelOutput]] = None,
         **model_kwargs,
     ) -> Tuple[torch.LongTensor, Dict[str, Any]]:
-        print('_expand_inputs_for_generation')
+        # print('_expand_inputs_for_generation')
         expanded_return_idx = (
             torch.arange(input_ids.shape[0]).view(-1, 1).repeat(1, expand_size).view(-1).to(input_ids.device)
         )
@@ -1266,9 +1853,13 @@ def eval_unsupervised(model, masker, test_dataloader, criterion):
             beta_mask = beta["attention_mask"]
             beta_tokentype = beta['token_type_ids']
             
-            alpha_observed_mask = torch.tensor(alpha_input)[:,1] != 4
-            beta_observed_mask = torch.tensor(beta_input)[:,1] != 4
-            peptide_observed_mask = torch.tensor(peptide_input)[:,1] != 4
+
+            alpha_observed_mask = alpha_input.clone().detach()[:,1] != 4
+            beta_observed_mask = beta_input.clone().detach()[:,1] != 4
+            peptide_observed_mask = peptide_input.clone().detach()[:,1] != 4
+            # alpha_observed_mask = torch.tensor(alpha_input)[:,1] != 4
+            # beta_observed_mask = torch.tensor(beta_input)[:,1] != 4
+            # peptide_observed_mask = torch.tensor(peptide_input)[:,1] != 4
             # lm_labels = alphabeta_output.clone()
             clf_label = binder.clone()
             labels = clf_label
@@ -1445,6 +2036,56 @@ def unsupervised_auc(model, test_dataloader, ignore_index):
 
 
 
+import copy
+def get_mi(model, dataset, mask_mhc=True, mask_peptide=True, mask_paired=False):
+    """_summary_
+    Compute the AUC of the model on the dataset using the Mutual Information on the alpha and beta chain.
+    when masking the MHC, the peptide or the paired alpha/beta chain.
+
+    Args:
+        model (_type_): Tulip model
+        dataset (_type_): TCRdataset model with positive and negative models
+        mask_mhc (bool, optional): either to include mhc in the MI computation. Defaults to True.
+        mask_peptide (bool, optional): either to include peptide in the MI computation. Defaults to True.
+        mask_paired (bool, optional): either to include the other tcr chain in the MI computation. . Defaults to False.
+
+    Raises:
+        ValueError: _description_
+
+    Returns:
+        _type_: _description_
+    """
+
+    ignore_index = dataset.tokenizer.pad_token_id
+    clf_scoree, clf_scorea, clf_scoreb = get_logproba(dataset, model, ignore_index)
+    dataset2 = copy.deepcopy(dataset)
+    if mask_peptide:
+        dataset2.peptide = ['<MIS>']*len(dataset2.peptide)
+    if mask_mhc:
+        dataset2.MHC = ['<MIS>']*len(dataset2.MHC)
+    if mask_paired:
+        dataset2.alpha = ['<MIS>']*len(dataset2.alpha)
+    _, _, clf_scorebmi = get_logproba(dataset2, model, ignore_index)
+    clf_scorebmi = np.array(clf_scoreb) - np.array(clf_scorebmi)
+
+    dataset2 = copy.deepcopy(dataset)
+    if mask_peptide:
+        dataset2.peptide = ['<MIS>']*len(dataset2.peptide)
+    if mask_mhc:
+        dataset2.MHC = ['<MIS>']*len(dataset2.MHC)
+    if mask_paired:
+        dataset2.beta = ['<MIS>']*len(dataset2.beta)
+    _, clf_scoreami, _ = get_logproba(dataset2, model, ignore_index)
+    clf_scoreami = np.array(clf_scorea) - np.array(clf_scoreami)
+    return clf_scoreami, clf_scorebmi
+
+
+
+import numpy as np
+
+def NormalizeData(data):
+    return (data - np.min(data)) / (np.max(data) - np.min(data))
+
 
 
 def get_logscore(dataset, model, ignore_index):
@@ -1486,5 +2127,503 @@ def get_logscore(dataset, model, ignore_index):
             losse = LLLoss_raw(predictionsE, peptide_input, ignore_index)
             clf_scoree += [losse[i].cpu().item() for i in range(len(losse))]
         return clf_scoree
+
+
+def get_logproba(dataset, model, ignore_index):
+    dataloaderPetideSpecific = torch.utils.data.DataLoader(dataset=dataset, batch_size=100, shuffle=False, collate_fn=dataset.all2allmhc_collate_function)
+    model.eval()
+    with torch.no_grad():
+
+
+        clf_scoree, clf_scorea, clf_scoreb = [], [], []
+        Boolbinders = []
+        for i, (peptide, alpha, beta, binder, mhc) in enumerate(dataloaderPetideSpecific):
+            peptide_input = peptide['input_ids']
+            peptide_mask= peptide["attention_mask"]
+            peptide_tokentype = peptide['token_type_ids']
+            alpha_input = alpha['input_ids']
+            alpha_mask = alpha["attention_mask"]
+            alpha_tokentype = alpha['token_type_ids']
+            beta_input = beta['input_ids']
+            beta_mask = beta["attention_mask"]
+            beta_tokentype = beta['token_type_ids']
+
+            binder = binder
+
+            clf_label = binder.clone()
+            labels = clf_label
+
+            out = model(input_ids=(alpha_input,beta_input,peptide_input), attention_mask=(alpha_mask,beta_mask,peptide_mask),
+                                            labels=labels, mhc=mhc)
+
+            def softm(x):
+                x = torch.exp(x)
+                su = torch.sum(x, dim=1)
+                x = x/su
+                return x
+
+            prediction_scoresE = out.decoder_outputsE.lm_logits
+            prediction_scoresA = out.decoder_outputsA.lm_logits
+            prediction_scoresB = out.decoder_outputsB.lm_logits
+            predictionsE = F.log_softmax(prediction_scoresE, dim=2)
+            predictionsB = F.log_softmax(prediction_scoresB, dim=2)
+            predictionsA = F.log_softmax(prediction_scoresA, dim=2)
+
+            losse = LLLoss_raw(predictionsE, peptide_input, ignore_index)
+            lossa = LLLoss_raw(predictionsA, alpha_input, ignore_index)
+            lossb = LLLoss_raw(predictionsB, beta_input, ignore_index)
+            clf_scoree += [-1*losse[i].cpu().item() for i in range(len(losse))]
+            clf_scorea += [-1*lossa[i].cpu().item() for i in range(len(lossa))]
+            clf_scoreb += [-1*lossb[i].cpu().item() for i in range(len(lossb))]
+        return clf_scoree, clf_scorea, clf_scoreb
+    
+
+def get_auc_mi(model, dataset, mask_mhc=True, mask_peptide=True, mask_paired=False):
+    """_summary_
+    Compute the AUC of the model on the dataset using the Mutual Information on the alpha and beta chain.
+    when masking the MHC, the peptide or the paired alpha/beta chain.
+
+    Args:
+        model (_type_): Tulip model
+        dataset (_type_): TCRdataset model with positive and negative models
+        mask_mhc (bool, optional): either to include mhc in the MI computation. Defaults to True.
+        mask_peptide (bool, optional): either to include peptide in the MI computation. Defaults to True.
+        mask_paired (bool, optional): either to include the other tcr chain in the MI computation. . Defaults to False.
+
+    Raises:
+        ValueError: _description_
+
+    Returns:
+        _type_: _description_
+    """
+
+    ignore_index = dataset.tokenizer.pad_token_id
+    clf_scoree, clf_scorea, clf_scoreb = get_logproba(dataset, model, ignore_index)
+    dataset2 = copy.deepcopy(dataset)
+    if mask_peptide:
+        dataset2.peptide = ['<MIS>']*len(dataset2.peptide)
+    if mask_mhc:
+        dataset2.MHC = ['<MIS>']*len(dataset2.MHC)
+    if mask_paired:
+        dataset2.alpha = ['<MIS>']*len(dataset2.alpha)
+    _, _, clf_scorebmi = get_logproba(dataset2, model, ignore_index)
+    aucbmi = roc_auc_score(dataset.binder, np.array(clf_scoreb) - np.array(clf_scorebmi))
+
+    dataset2 = copy.deepcopy(dataset)
+    if mask_peptide:
+        dataset2.peptide = ['<MIS>']*len(dataset2.peptide)
+    if mask_mhc:
+        dataset2.MHC = ['<MIS>']*len(dataset2.MHC)
+    if mask_paired:
+        dataset2.beta = ['<MIS>']*len(dataset2.beta)
+    _, clf_scoreami, _ = get_logproba(dataset2, model, ignore_index)
+    aucami = roc_auc_score(dataset.binder, np.array(clf_scorea) - np.array(clf_scoreami))
+    return aucami, aucbmi
+
+
+
+def load_model_output(tokenizer, mhctok, peptide,  alpha_model=None, beta_model=None, alpha_to_fill=None, beta_to_fill= None, device='cpu', mhc="HLA-A*02:01"):
+    df2 = pd.DataFrame(columns =['CDR3b' ,'CDR3a', "peptide","MHC", "binder"])
+    print('coucou')
+    assert alpha_model is not None or alpha_to_fill is not None, "alpha missing"
+    assert beta_model is not None or beta_to_fill is not None, "beta missing"
+    if alpha_model is not None:
+        alpha_seq = tokenizer.batch_decode(alpha_model, skip_special_tokens=True)
+        alpha_seq = [s.replace(" ","") for s in alpha_seq]
+        alpha_seq = [x if x != '' else 'A' for x in alpha_seq]
+        batchsize_a = len(alpha_seq)
+    if beta_model is not None:
+        beta_seq = tokenizer.batch_decode(beta_model, skip_special_tokens=True)
+        beta_seq = [s.replace(" ","") for s in beta_seq]
+        beta_seq = [x if x != '' else 'A' for x in beta_seq]
+        batchsize_b = len(beta_seq)
+    if alpha_model is None:
+        batchsize_a = batchsize_b
+        alpha_seq = [alpha_to_fill]*batchsize_a
+    if beta_model is None:
+        batchsize_b = batchsize_a
+        beta_seq = [beta_to_fill]*batchsize_b
+
+    assert batchsize_a == batchsize_b, "batchsize mismatch"
+    dataset = TCRDataset.empty_init(tokenizer, device, mhctok)
+    for i in range(batchsize_a):
+        df2 = pd.concat([df2, pd.DataFrame([{"CDR3b":beta_seq[i], "CDR3a":alpha_seq[i],"MHC":mhc, "peptide":peptide, "binder":1}])], ignore_index=True)
+        dataset.append( MHC=mhc, alpha=alpha_seq[i], beta=beta_seq[i], peptide=peptide, binder=1)
+
+    # df2.to_csv("tmp.csv", index=False)
+
+    # dataset = TCRDataset("tmp.csv", tokenizer, device, mhctok=mhctok)
+    
+    return dataset
+
+
+def sample_chain_de_novo(model, tokenizer, mhctok, starting_batch, peptide_str, num_return_sequences=1, mode='greedy', togenerate='B', temperature= 1.0):
+
+    peptide, alpha, beta, binder, mhc = starting_batch
+    peptide_input = peptide['input_ids']
+    peptide_mask= peptide["attention_mask"]
+    peptide_tokentype = peptide['token_type_ids']
+    alpha_input = alpha['input_ids']
+    alpha_mask = alpha["attention_mask"]
+    alpha_tokentype = alpha['token_type_ids']
+    beta_input = beta['input_ids']
+    beta_mask = beta["attention_mask"]
+    beta_tokentype = beta['token_type_ids']
+
+    model_kwargs = {}
+    model_kwargs["input_ids"] = (alpha_input, beta_input, peptide_input)
+    model_kwargs["attention_mask"] = (alpha_mask, beta_mask, peptide_mask)
+    model_kwargs["mhc"] = mhc
+    model_kwargs["togenerate"] = togenerate
+    model_kwargs["use_cache"] = False
+
+    model_kwargs_copy = copy.deepcopy(model_kwargs)
+
+
+    if mode=='greedy':
+        generate_ids = model.generate(
+        inputs= None, #### Is inputs filtered wtf 
+        max_length = 40,
+        do_sample = False,
+        early_stopping= False,
+        num_beams= 1,
+        temperature= 1.0,
+        bos_token_id = tokenizer.cls_token_id,
+        pad_token_id = tokenizer.pad_token_id,
+        eos_token_id = tokenizer.eos_token_id,
+        num_return_sequences = 1,
+        suppress_tokens = [tokenizer.pad_token_id, tokenizer.cls_token_id, 4, 28,  25,26,29,27,   0],
+        **model_kwargs_copy)
+        print(generate_ids)
+
+    elif mode=='sampling':
+        generate_ids = model.generate(
+        inputs= None, #### Is inputs filtered wtf 
+        max_length = 40,
+        do_sample = True,
+        temperature= temperature,
+        bos_token_id = tokenizer.cls_token_id,
+        pad_token_id = tokenizer.pad_token_id,
+        eos_token_id = tokenizer.eos_token_id,
+        num_return_sequences = 1,
+        suppress_tokens = [tokenizer.pad_token_id, tokenizer.cls_token_id, 4, 28, 25, 26, 29,27, 0],
+        **model_kwargs_copy)
+    
+
+    elif mode=='beamsearch':
+        generate_ids = model.generate(
+        inputs= None, #### Is inputs filtered wtf 
+        max_length = 40,
+        do_sample = False,
+        early_stopping= False,
+        num_beams= 10,
+        temperature= 1.0,
+        top_k= None,
+        top_p = None,
+        bos_token_id = tokenizer.cls_token_id,
+        pad_token_id = tokenizer.pad_token_id,
+        eos_token_id = tokenizer.eos_token_id,
+        num_return_sequences = num_return_sequences,
+        suppress_tokens = [tokenizer.pad_token_id, tokenizer.cls_token_id, 4, 28, 25,26, 27, 29,0],
+        **model_kwargs_copy)
+    
+
+    else:
+        raise ValueError("mode not recognized")
+
+
+    if togenerate=='B':
+        print( generate_ids)
+        alpha_start = tokenizer.decode(alpha_input[0], skip_special_tokens=True).replace(" ", "")
+        beta_start = tokenizer.decode(beta_input[0], skip_special_tokens=True).replace(" ", "")
+        dts = load_model_output(tokenizer, mhctok, peptide_str,  alpha_model=alpha_input, beta_model=generate_ids, alpha_to_fill=None, beta_to_fill= None, device=model.device)
+
+    elif togenerate=='A':
+        alpha_start = tokenizer.decode(alpha_input[0], skip_special_tokens=True).replace(" ", "")
+        beta_start = tokenizer.decode(beta_input[0], skip_special_tokens=True).replace(" ", "")
+        dts = load_model_output(tokenizer, mhctok, peptide_str,  alpha_model=generate_ids, beta_model=beta_input, alpha_to_fill=None, beta_to_fill= None, device=model.device)
+
+    return dts, generate_ids
+
+
+
+def sample_tcr_denovo(model, peptide, tokenizer, mhctok,  n_recycle=3, num_return_sequences=1, mode='sampling', temperature= 1.0):
+        out_dts = TCRDataset.empty_init(tokenizer, model.device, mhctok=mhctok)
+        with torch.inference_mode():
+            # for j in range(num_return_sequences):
+            starting_batch = get_starting_batch(peptide,tokenizer, mhctok, model.device, size=num_return_sequences)
+
+
+            for i in range(n_recycle):
+                dts, _ = sample_chain_de_novo(model, tokenizer, mhctok, starting_batch, peptide,num_return_sequences=1, mode=mode, togenerate='B', temperature= temperature)
+                print(dts.alpha)
+                # [print('alpha', alpha, 'beta',beta, 'peptide',peptide, mhc) for alpha, beta, peptide, mhc in zip(dts.alpha, dts.beta, dts.peptide, dts.MHC)]
+
+                dl = data.DataLoader(dts, batch_size=len(dts), shuffle=False, collate_fn=dts.all2allmhc_collate_function)
+                starting_batch = next(iter(dl))
+                dts, _ = sample_chain_de_novo(model, tokenizer, mhctok,  starting_batch,peptide,num_return_sequences=1, mode=mode, togenerate='A', temperature= temperature)
+                # [print('alpha', alpha, 'beta',beta, 'peptide',peptide, mhc) for alpha, beta, peptide, mhc in zip(dts.alpha, dts.beta, dts.peptide, dts.MHC)]
+
+                dl = data.DataLoader(dts, batch_size=len(dts), shuffle=False, collate_fn=dts.all2allmhc_collate_function)
+                starting_batch = next(iter(dl))
+            out_dts.concatenate(dts)
+        return out_dts
+
+def sample_tcr_denovo_from_chain(model, peptide, tokenizer, mhctok, datainit,  n_recycle=1, num_return_sequences=1, mode='sampling', temperature= 1.0):
+        out_dts = TCRDataset.empty_init(tokenizer, model.device, mhctok=mhctok)
+        with torch.inference_mode():
+            # for j in range(num_return_sequences):
+            starting_batch = get_starting_batch_from_chain(peptide, datainit, chain='alpha')
+
+
+            for i in range(n_recycle):
+                dts, _ = sample_chain_de_novo(model, tokenizer, mhctok, starting_batch, peptide,num_return_sequences=1, mode=mode, togenerate='B', temperature= temperature)
+                print(dts.alpha)
+                # [print('alpha', alpha, 'beta',beta, 'peptide',peptide, mhc) for alpha, beta, peptide, mhc in zip(dts.alpha, dts.beta, dts.peptide, dts.MHC)]
+
+                dl = data.DataLoader(dts, batch_size=len(dts), shuffle=False, collate_fn=dts.all2allmhc_collate_function)
+                starting_batch = next(iter(dl))
+                dts, _ = sample_chain_de_novo(model, tokenizer, mhctok,  starting_batch,peptide,num_return_sequences=1, mode=mode, togenerate='A', temperature= temperature)
+                # [print('alpha', alpha, 'beta',beta, 'peptide',peptide, mhc) for alpha, beta, peptide, mhc in zip(dts.alpha, dts.beta, dts.peptide, dts.MHC)]
+
+                dl = data.DataLoader(dts, batch_size=len(dts), shuffle=False, collate_fn=dts.all2allmhc_collate_function)
+                starting_batch = next(iter(dl))
+            out_dts.concatenate(dts)
+        return out_dts
+
+def get_starting_batch(peptide, tokenizer, mhctok, device,  size=1, MHC='HLA-A*02:01'):
+    dataset = TCRDataset.empty_init( tokenizer, device, mhctok=mhctok )
+    for i in range(size):
+        dataset.append(peptide=peptide, MHC=MHC)
+
+    dl = data.DataLoader(dataset, batch_size=size, shuffle=False, collate_fn=dataset.all2allmhc_collate_function)
+    return next(iter(dl))
+
+def get_starting_batch_from_chain(peptide,  datainit, chain='alpha', MHC='HLA-A*02:01'):
+    dataset = datainit.select_peptide(peptide)
+    dataset = dataset.select_chain(chain)
+    dataset.MHC = ['HLA-A*02:01']*len(dataset)
+    if chain == 'alpha':
+        dataset.beta = ['<MIS>']*len(dataset)
+    if chain == 'beta':
+        dataset.alpha = ['<MIS>']*len(dataset)
+    dl = data.DataLoader(dataset, batch_size=len(dataset), shuffle=False, collate_fn=dataset.all2allmhc_collate_function)
+    return next(iter(dl))
+
+# def LLLoss_raw3(predictions, targets, ignore_index):
+#     """Compute our custom loss"""
+#     criterion = nn.NLLLoss(ignore_index=ignore_index, reduction='none')
+#     if len(targets)>0:
+#       predictions = predictions[:, :10, :].contiguous()
+#       targets = targets[:, 1:11]
+#       bs = targets.shape[0]
+
+#       rearranged_output = predictions.view(predictions.shape[0]*predictions.shape[1], -1)
+#       rearranged_target = targets.contiguous().view(-1)
+
+#       loss = criterion(rearranged_output, rearranged_target).reshape(bs,-1).sum(dim=1)
+#     else:
+#       loss = torch.zeros(1)
+#     return loss
+
+
+
+def get_logproba(dataset, model, ignore_index):
+    dataloaderPetideSpecific = torch.utils.data.DataLoader(dataset=dataset, batch_size=100, shuffle=False, collate_fn=dataset.all2allmhc_collate_function)
+    model.eval()
+    with torch.no_grad():
+
+
+        clf_scoree = []
+        clf_scorea = []
+        clf_scoreb = []
+        Boolbinders = []
+        for i, (peptide, alpha, beta, binder, mhc) in enumerate(dataloaderPetideSpecific):
+            peptide_input = peptide['input_ids']
+            peptide_mask= peptide["attention_mask"]
+            peptide_tokentype = peptide['token_type_ids']
+            alpha_input = alpha['input_ids']
+            alpha_mask = alpha["attention_mask"]
+            alpha_tokentype = alpha['token_type_ids']
+            beta_input = beta['input_ids']
+            beta_mask = beta["attention_mask"]
+            beta_tokentype = beta['token_type_ids']
+
+            binder = binder
+
+            clf_label = binder.clone()
+            labels = clf_label
+
+            out = model(input_ids=(alpha_input,beta_input,peptide_input), attention_mask=(alpha_mask,beta_mask,peptide_mask),
+                                            labels=labels, mhc=mhc)
+
+            def softm(x):
+                x = torch.exp(x)
+                su = torch.sum(x, dim=1)
+                x = x/su
+                return x
+
+            prediction_scoresE = out.decoder_outputsE.lm_logits
+            prediction_scoresA = out.decoder_outputsA.lm_logits
+            prediction_scoresB = out.decoder_outputsB.lm_logits
+            predictionsE = F.log_softmax(prediction_scoresE, dim=2)
+            predictionsB = F.log_softmax(prediction_scoresB, dim=2)
+            predictionsA = F.log_softmax(prediction_scoresA, dim=2)
+
+            losse = LLLoss_raw(predictionsE, peptide_input, ignore_index)
+            lossa = LLLoss_raw(predictionsA, alpha_input, ignore_index)
+            lossb = LLLoss_raw(predictionsB, beta_input, ignore_index)
+            clf_scoree += [-1*losse[i].cpu().item() for i in range(len(losse))]
+            clf_scorea += [-1*lossa[i].cpu().item() for i in range(len(lossa))]
+            clf_scoreb += [-1*lossb[i].cpu().item() for i in range(len(lossb))]
+        return clf_scoree, clf_scorea, clf_scoreb
+    
+
+def closest_seq_dist(seq, dataset):
+    dists = []
+    for i in range(len(dataset)):
+        dists.append(Levenshtein.distance(seq, dataset[i]))
+    return np.min(dists)
+
+def autoregressive_step(alpha_input,beta_input,peptide_input, alpha_mask,beta_mask,peptide_mask, mhc, togenerate='B', temperature= 1.0):
+    """ Implement a single step of autoregressive decoding, should return the new sequence (augmented of one aa), the proba of the new aa"""
+    out = model(input_ids=(alpha_input,beta_input,peptide_input), attention_mask=(alpha_mask,beta_mask,peptide_mask),
+                                labels=torch.tensor([1]), mhc=mhc)
+    if togenerate=='B':
+        prediction_scores = out.decoder_outputsB.lm_logits
+        prob = F.softmax(prediction_scores, dim=2)
+        next_pos_prob = prob[:, -1, :]
+
+        next_aa = samples = torch.multinomial(next_pos_prob.flatten(), 1, replacement=True).unsqueeze(0)
+        # Append the sampled amino acid to the beta_input
+        extended_beta_input = torch.cat((beta_input, next_aa), dim=1)
+        extended_beta_mask = torch.cat((beta_mask, torch.ones_like(next_aa)), dim=1)
+        
+        # Compute the probability of the sampled amino acid
+        sampled_aa_prob = next_pos_prob.flatten()[int(next_aa)]
+        finish=int(next_aa)==2
+
+    return extended_beta_input, extended_beta_mask, sampled_aa_prob.detach().numpy() , finish
+        
+def sample_beta(alpha_input,beta_input,peptide_input, alpha_mask,beta_mask,peptide_mask, mhc, togenerate='B', temperature= 1.0):
+    """ Implement a single step of autoregressive decoding, should return the new sequence (augmented of one aa), the proba of the new aa"""
+    beta_input_start = beta_input[:, :1]
+    beta_mask_start = beta_mask[:, :1]
+    prob_seq = []
+    finish = False
+    while not finish:
+        beta_input_start, beta_mask_start, sampled_aa_prob, finish = autoregressive_step(alpha_input,beta_input_start,peptide_input, alpha_mask,beta_mask_start,peptide_mask, mhc, togenerate='B', temperature= 1.0)
+        prob_seq.append(sampled_aa_prob)
+        # print(beta_input_start, sampled_aa_prob)
+    return tokenizer.decode(beta_input_start[0], skip_special_tokens=True).replace(" ", "")
+
+def entropy_beta(dataset, model, tokenizer):
+    dl = data.DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=datasetPetideSpecific.all2allmhc_collate_function)
+    cond_entropy = []
+    for i, starting_batch in enumerate(dl):
+        print(i ,starting_batch )
+        new_samples, generate_ids = sample_chain_de_novo(model, tokenizer, starting_batch, num_return_sequences=1000, mode='sampling', togenerate='B', temperature= 1.0)
+        pe, pa, pb = get_logproba(new_samples, model, ignore_index =  tokenizer.pad_token_id)
+        cond_entropy.append(-1*np.mean(pb))
+    data_2 = copy.deepcopy(dataset)
+    data_2.alpha = ['<MIS>']*len(data_2)
+    starting_batch = next(iter(dl)) 
+    new_samples, generate_ids = sample_chain_de_novo(model, tokenizer, starting_batch, num_return_sequences=1000, mode='sampling', togenerate='B', temperature= 1.0)
+    pe, pa, pb = get_logproba(new_samples, model, ignore_index =  tokenizer.pad_token_id)
+    uncond_entropy = -1*np.mean(pb)
+    return uncond_entropy, cond_entropy
+
+
+def entropy_alpha(dataset, model, tokenizer):
+    dl = data.DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=datasetPetideSpecific.all2allmhc_collate_function)
+    cond_entropy = []
+    for i, starting_batch in enumerate(dl):
+        new_samples, generate_ids = sample_chain_de_novo(model, tokenizer, starting_batch, num_return_sequences=1000, mode='sampling', togenerate='A', temperature= 1.0)
+        pe, pa, pb = get_logproba(new_samples, model, ignore_index =  tokenizer.pad_token_id)
+        cond_entropy.append(-1*np.mean(pb))
+    data_2 = copy.deepcopy(dataset)
+    data_2.beta = ['<MIS>']*len(data_2)
+    starting_batch = next(iter(dl)) 
+    new_samples, generate_ids = sample_chain_de_novo(model, tokenizer, starting_batch, num_return_sequences=1000, mode='sampling', togenerate='A', temperature= 1.0)
+    pe, pa, pb = get_logproba(new_samples, model, ignore_index =  tokenizer.pad_token_id)
+    uncond_entropy =-1* np.mean(pb)
+    return uncond_entropy, cond_entropy
+
+
+
+
+
+def train_unsupervised_multigpus(model, optimizer, masker, train_dataloader, criterion, alph = 1.0):
+    model.train()
+
+    epoch_lm_lossA = 0
+    epoch_lm_lossB = 0
+    epoch_lm_lossE = 0
+    epoch_mlm_lossA = 0
+    epoch_mlm_lossB = 0
+    epoch_mlm_lossE = 0
+    count_A = 0
+    count_B = 0
+    count_E = 0
+    for i, (peptide, alpha, beta, binder, mhc) in enumerate(train_dataloader):
+        optimizer.zero_grad()
+        peptide_input = peptide['input_ids']
+        peptide_mask= peptide["attention_mask"]
+        peptide_tokentype = peptide['token_type_ids']
+        alpha_input = alpha['input_ids']
+        alpha_mask = alpha["attention_mask"]
+        alpha_tokentype = alpha['token_type_ids']
+        beta_input = beta['input_ids']
+        beta_mask = beta["attention_mask"]
+        beta_tokentype = beta['token_type_ids']
+        
+
+        alpha_observed_mask = alpha_input.clone().detach()[:,1] != 4
+        beta_observed_mask = beta_input.clone().detach()[:,1] != 4
+        peptide_observed_mask = peptide_input.clone().detach()[:,1] != 4
+        clf_label = binder.clone()
+        labels = clf_label
+
+        out = model(input_ids=(alpha_input,beta_input,peptide_input), attention_mask=(alpha_mask,beta_mask,peptide_mask),
+                                        labels=labels, mhc=mhc)
+
+        prediction_scoresA = out.decoder_outputsA.lm_logits
+        predictionsA = F.log_softmax(prediction_scoresA, dim=2)
+        prediction_scoresB = out.decoder_outputsB.lm_logits
+        predictionsB = F.log_softmax(prediction_scoresB, dim=2)
+        prediction_scoresE = out.decoder_outputsE.lm_logits
+        predictionsE = F.log_softmax(prediction_scoresE, dim=2)
+        lossa = compute_loss(predictionsA[alpha_observed_mask], alpha_input[alpha_observed_mask], criterion) 
+        lossb = compute_loss(predictionsB[beta_observed_mask], beta_input[beta_observed_mask],criterion) 
+        losse = compute_loss(predictionsE[peptide_observed_mask], peptide_input[peptide_observed_mask], criterion)
+
+        mlm_lossA = MLM_Loss(model.encoderA, model.MLMHeadA, masker, alpha_input, alpha_mask, alpha_observed_mask)
+        mlm_lossB = MLM_Loss(model.encoderB, model.MLMHeadB, masker, beta_input, beta_mask, beta_observed_mask)
+        mlm_lossE = MLM_Loss(model.encoderE, model.MLMHeadE, masker, peptide_input, peptide_mask, peptide_observed_mask)
+
+        loss = mlm_lossA+mlm_lossB+mlm_lossE+alph*(lossa+lossb+losse)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        count_A += sum(alpha_observed_mask)
+        count_B += sum(beta_observed_mask)
+        count_E += sum(peptide_observed_mask)
+        epoch_lm_lossA += lossa
+        epoch_lm_lossB += lossb
+        epoch_lm_lossE += losse
+        epoch_mlm_lossA += mlm_lossA
+        epoch_mlm_lossB += mlm_lossB
+        epoch_mlm_lossE += mlm_lossE
+
+    epoch_lm_lossA /= count_A
+    epoch_lm_lossB /= count_B
+    epoch_lm_lossE /= count_E
+    epoch_mlm_lossA /= count_A
+    epoch_mlm_lossB /= count_B
+    epoch_mlm_lossE /= count_E
+
+    return epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE
+
+
 
 
