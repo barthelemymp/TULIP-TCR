@@ -13,9 +13,10 @@ from sklearn.metrics import roc_auc_score
 import torch
 
 from transformers.models.encoder_decoder.configuration_encoder_decoder import EncoderDecoderConfig
-from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip, get_logscore
+from src.multiTrans import TulipPetal, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip, get_logscore
 
 import argparse
+
 
 
 
@@ -39,12 +40,13 @@ def main():
     )
     parser.add_argument(
         "--modelconfig",
+        default="configs/shallow.config.json",
         type=str,
         help="path to json including the config of the model" ,
     )
     parser.add_argument(
         "--load",
-        default=None,
+        default="model_weights/pytorch_model.bin",
         type=str,
         help="path to the model pretrained to load" ,
     )
@@ -74,8 +76,6 @@ def main():
     print("Using device:", device)
 
     test_path = args.test_dir
-    train_path = args.train_dir
-
 
 
     tokenizer = AutoTokenizer.from_pretrained("aatok/")
@@ -106,11 +106,13 @@ def main():
     )
 
     mhctok = AutoTokenizer.from_pretrained("mhctok/")
-
     vocabsize = len(tokenizer._tokenizer.get_vocab())
     mhcvocabsize = len(mhctok._tokenizer.get_vocab())
+    print(mhcvocabsize)
     print("Loading models ..")
-    max_length = 114
+    # vocabsize = encparams["vocab_size"]
+
+    max_length = 50
     encoder_config = BertConfig(vocab_size = vocabsize,
                         max_position_embeddings = max_length, # this shuold be some large value
                         num_attention_heads = modelconfig["num_attn_heads"],
@@ -125,39 +127,39 @@ def main():
     encoderB = BertModel(config=encoder_config)
     encoderE = BertModel(config=encoder_config)
 
+    max_length = 100
     max_length = 50
     decoder_config = BertConfig(vocab_size = vocabsize,
-                        max_position_embeddings = max_length, 
+                        max_position_embeddings = max_length, # this shuold be some large value
                         num_attention_heads = modelconfig["num_attn_heads"],
                         num_hidden_layers = modelconfig["num_hidden_layers"],
                         hidden_size = modelconfig["hidden_size"],
                         type_vocab_size = 1,
-                        is_decoder=True, 
-                        pad_token_id =  tokenizer.pad_token_id)   
-    
+                        is_decoder=True,
+                        pad_token_id =  tokenizer.pad_token_id)    # Very Important
+
     decoder_config.add_cross_attention=True
 
-    decoderA = ED_BertForSequenceClassification(config=decoder_config)
+    decoderA = TulipPetal(config=decoder_config) #BertForMaskedLM
     decoderA.pooler = BertLastPooler(config=decoder_config)
-    decoderB = ED_BertForSequenceClassification(config=decoder_config) 
+    decoderB = TulipPetal(config=decoder_config) #BertForMaskedLM
     decoderB.pooler = BertLastPooler(config=decoder_config)
-    decoderE = ED_BertForSequenceClassification(config=decoder_config) 
+    decoderE = TulipPetal(config=decoder_config) #BertForMaskedLM
     decoderE.pooler = BertLastPooler(config=decoder_config)
+
+
     # Define encoder decoder model
+    
+
     model = Tulip(encoderA=encoderA,encoderB=encoderB,encoderE=encoderE, decoderA=decoderA, decoderB=decoderB, decoderE=decoderE)
-
-    def count_parameters(mdl):
-        return sum(p.numel() for p in mdl.parameters() if p.requires_grad)
-
-
-    for p in model.parameters():
-        if p.dim() > 1:
-            nn.init.xavier_normal_(p)
-
-    if args.load:
-        checkpoint = torch.load(args.load+"/pytorch_model.bin")
+    if torch.cuda.is_available():
+        checkpoint = torch.load(args.load)
         model.load_state_dict(checkpoint)
-        print("loaded")
+        
+    else:
+        checkpoint = torch.load(args.load, map_location=torch.device('cpu'))
+        model.load_state_dict(checkpoint)
+        
     model.to(device)
     target_peptidesFinal = pd.read_csv(test_path)["peptide"].unique()
 
@@ -172,7 +174,9 @@ def main():
         results["peptide"] = target_peptide
         results["rank"] = ranks
         results["score"] = scores
-        results.to_csv(args.save + target_peptide+".csv")
+        results.to_csv(args.output + target_peptide+".csv")
+        auce = roc_auc_score(datasetPetideSpecific.binder, ranks)
+        print(auce)
 
 
 if __name__ == "__main__":
