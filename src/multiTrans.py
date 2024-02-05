@@ -27,6 +27,8 @@ import numpy as np
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
+### DATA
+
 def generate_negative(df, neg_per_pos=5):
     epit = df["peptide"].unique()
     epitope_A = {epitope:df[df["peptide"]==epitope]["CDR3a"].unique() for epitope in epit}
@@ -327,7 +329,7 @@ class TCRDataset(data.Dataset):
 
 
 
-
+### MODELING
 
 class ClassifCausalLMOutputWithCrossAttentions(ModelOutput):
     lm_loss: Optional[torch.FloatTensor] = None
@@ -1009,39 +1011,9 @@ class Tulip(PreTrainedModel):
             )
             pooled_outputE= decoder_outputsE.pooled_output
 
-        # pooled_output = torch.cat([pooled_outputA,pooled_outputB,pooled_outputE], dim=1)
-        # logits = self.classifier(pooled_output)
-        # labelsCLS = labels
-        # print('labelsCLS', labelsCLS)
         lossCLS = None
         logits = None
-        # if labelsCLS is not None:
-        #     if self.config.problem_type is None:
-        #         if self.num_labels == 1:
-        #             self.config.problem_type = "regression"
-        #         elif self.num_labels > 1 and (labelsCLS.dtype == torch.long or labelsCLS.dtype == torch.int):
-        #             self.config.problem_type = "single_label_classification"
-        #         else:
-        #             self.config.problem_type = "multi_label_classification"
-
-        #     if self.config.problem_type == "regression":
-        #         loss_fct = MSELoss()
-        #         if self.num_labels == 1:
-        #             lossCLS = loss_fct(logits.squeeze(), labelsCLS.squeeze())
-        #         else:
-        #             lossCLS = loss_fct(logits, labelsCLS)
-        #     elif self.config.problem_type == "single_label_classification":
-        #         if self.reweight == True:
-        #             loss_fct = CrossEntropyLoss(reduction="none")
-        #             lossCLS = loss_fct(logits.view(-1, self.num_labels), labelsCLS.view(-1))
-        #         else:
-        #             loss_fct = CrossEntropyLoss()
-        #             lossCLS = loss_fct(logits.view(-1, self.num_labels), labelsCLS.view(-1))
-        #     elif self.config.problem_type == "multi_label_classification":
-        #         loss_fct = BCEWithLogitsLoss()
-        #         lossCLS = loss_fct(logits, labelsCLS)
-
-
+      
 
 
         # Compute loss independent from decoder (as some shift the logits inside them)
@@ -1085,11 +1057,6 @@ class Tulip(PreTrainedModel):
             )
         
 
-        # if not return_dict:
-        #     if loss is not None:
-        #         return (loss,) + decoder_outputs + encoder_outputs
-        #     else:
-        #         return decoder_outputs + encoder_outputs
         else:
             return ED_LMOutput(
                 loss = lossCLS,
@@ -1170,6 +1137,172 @@ class Tulip(PreTrainedModel):
     def set_reweight(self):
         self.reweight = True
 
+
+ 
+    def _prepare_model_inputs(
+        self,
+        inputs: Optional[torch.Tensor] = None,
+        bos_token_id: Optional[int] = None,
+        model_kwargs: Optional[Dict[str, torch.Tensor]] = None,
+    ) -> Tuple[torch.Tensor, Optional[str], Dict[str, torch.Tensor]]:
+        """
+        This function extracts the model-specific `inputs` for generation.
+        """
+
+        input_name = "input_ids"
+        model_kwargs = {k: v for k, v in model_kwargs.items() if v is not None or k != input_name} #WHYYYYY
+
+        # 5. if `inputs` is still None, try to create `input_ids` from BOS token
+        if inputs is None:
+            bs = model_kwargs["input_ids"][0].shape[0]
+            inputs = torch.ones((bs,1), dtype=torch.long, device=device) * bos_token_id
+            # self._prepare_input_ids_for_generation(bos_token_id, model_kwargs.get("encoder_outputs"))
+
+        # print('_prepare_model_inputs', inputs, input_name, model_kwargs)
+        return inputs, input_name, model_kwargs
+
+    def _prepare_encoder_decoder_kwargs_for_generation(
+        self, inputs_tensor: torch.Tensor, model_kwargs, model_input_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+
+        encoder_kwargs = model_kwargs.copy()
+        encoder_kwargs["togenerate"] = None
+
+        # 3. make sure that encoder returns `ModelOutput`
+        model_input_name = model_input_name if model_input_name is not None else self.main_input_name
+        encoder_kwargs["return_dict"] = True
+        # encoder_kwargs[model_input_name] = inputs_tensor
+        # model_kwargs["encoder_outputs"]: ModelOutput 
+        out = self.forward(**encoder_kwargs)
+        model_kwargs["encoder_outputs"] = (out.encoder_outputsA, out.encoder_outputsB, out.encoder_outputsE)
+        model_kwargs["decoder_input_ids"] = inputs_tensor  #### Not NEEDED?
+        model_kwargs.pop("input_ids", None) #### WHY?
+
+        return model_kwargs
+
+
+    @staticmethod
+    def _update_model_kwargs_for_generation(
+        outputs: ModelOutput, model_kwargs: Dict[str, Any], is_encoder_decoder: bool = False
+    ) -> Dict[str, Any]:
+        # print('_update_model_kwargs_for_generation')
+        # update past
+        if "past_key_values" in outputs:
+            model_kwargs["past"] = outputs.past_key_values
+        elif "mems" in outputs:
+            model_kwargs["past"] = outputs.mems
+        elif "past_buckets_states" in outputs:
+            model_kwargs["past"] = outputs.past_buckets_states
+        else:
+            model_kwargs["past"] = None
+
+        # update token_type_ids with last value
+        if "token_type_ids" in model_kwargs:
+            token_type_ids = model_kwargs["token_type_ids"]
+            model_kwargs["token_type_ids"] = torch.cat([token_type_ids, token_type_ids[:, -1].unsqueeze(-1)], dim=-1)
+
+        # update attention mask
+        if not is_encoder_decoder:
+            if "attention_mask" in model_kwargs:
+                attention_mask = model_kwargs["attention_mask"]
+                model_kwargs["attention_mask"] = torch.cat(
+                    [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1
+                )
+
+        return model_kwargs
+    
+
+    def _prepare_decoder_input_ids_for_generation(
+        self,
+        batch_size: int,
+        model_input_name: str,
+        model_kwargs: Dict[str, torch.Tensor],
+        decoder_start_token_id: int = None,
+        bos_token_id: int = None,
+        device: torch.device = None,
+    ) -> Tuple[torch.LongTensor, Dict[str, torch.Tensor]]:
+        """Prepares `decoder_input_ids` for generation with encoder-decoder models"""
+        # 1. Check whether the user has defined `decoder_input_ids` manually. To facilitate in terms of input naming,
+        # we also allow the user to pass it under `input_ids`, if the encoder does not use it as the main input.
+        if model_kwargs is not None and "decoder_input_ids" in model_kwargs:
+            decoder_input_ids = model_kwargs.pop("decoder_input_ids")
+        elif "input_ids" in model_kwargs and model_input_name != "input_ids":
+            decoder_input_ids = model_kwargs.pop("input_ids")
+        else:
+            decoder_input_ids = None
+
+        # 2. Encoder-decoder models expect the `decoder_input_ids` to start with a special token. Let's ensure that.
+        decoder_start_token_id = self._get_decoder_start_token_id(decoder_start_token_id, bos_token_id)
+        if device is None:
+            device = self.device
+        decoder_input_ids_start = torch.ones((batch_size, 1), dtype=torch.long, device=device) * decoder_start_token_id
+
+        # no user input -> use decoder_start_token_id as decoder_input_ids
+        if decoder_input_ids is None:
+            decoder_input_ids = decoder_input_ids_start
+        # exception: Donut checkpoints have task-specific decoder starts and don't expect a BOS token
+        elif self.config.model_type == "vision-encoder-decoder" and "donut" in self.name_or_path.lower():
+            pass
+        # user input but doesn't start with decoder_start_token_id -> prepend decoder_start_token_id (and adjust
+        # decoder_attention_mask if provided)
+        elif (decoder_input_ids[:, 0] != decoder_start_token_id).all().item():
+            decoder_input_ids = torch.cat([decoder_input_ids_start, decoder_input_ids], dim=-1)
+            if "decoder_attention_mask" in model_kwargs:
+                decoder_attention_mask = model_kwargs["decoder_attention_mask"]
+                decoder_attention_mask = torch.cat(
+                    (torch.ones_like(decoder_attention_mask)[:, :1], decoder_attention_mask),
+                    dim=-1,
+                )
+                model_kwargs["decoder_attention_mask"] = decoder_attention_mask
+
+        return decoder_input_ids, model_kwargs
+
+
+    @staticmethod
+    def _expand_inputs_for_generation(
+        input_ids: torch.LongTensor,
+        expand_size: int = 1,
+        is_encoder_decoder: bool = False,
+        attention_mask: Optional[torch.LongTensor] = (None,None,None),
+        encoder_outputs: Optional[Tuple[ModelOutput]] = None,
+        **model_kwargs,
+    ) -> Tuple[torch.LongTensor, Dict[str, Any]]:
+        # print('_expand_inputs_for_generation')
+        expanded_return_idx = (
+            torch.arange(input_ids.shape[0]).view(-1, 1).repeat(1, expand_size).view(-1).to(input_ids.device)
+        )
+        input_ids = input_ids.index_select(0, expanded_return_idx)
+        model_kwargs["mhc"]["input_ids"] = model_kwargs["mhc"]["input_ids"].index_select(0, expanded_return_idx)
+        model_kwargs["mhc"]["attention_mask"] = model_kwargs["mhc"]["attention_mask"].index_select(0, expanded_return_idx)
+        if "token_type_ids" in model_kwargs:
+            token_type_ids = model_kwargs["token_type_ids"]
+            model_kwargs["token_type_ids"] = token_type_ids.index_select(0, expanded_return_idx)
+
+        if attention_mask is not None:
+            model_kwargs["attention_mask"] = (attention_mask[0].index_select(0, expanded_return_idx),
+                                                attention_mask[1].index_select(0, expanded_return_idx),
+                                                attention_mask[2].index_select(0, expanded_return_idx))
+        
+
+        if is_encoder_decoder:
+            if encoder_outputs == (None,None,None):
+                raise ValueError("If `is_encoder_decoder` is True, make sure that `encoder_outputs` is defined.")
+            encoder_outputs[0]["last_hidden_state"] = encoder_outputs[0].last_hidden_state.index_select(
+                0, expanded_return_idx.to(encoder_outputs[0].last_hidden_state.device)
+            )
+            encoder_outputs[1]["last_hidden_state"] = encoder_outputs[1].last_hidden_state.index_select(
+                0, expanded_return_idx.to(encoder_outputs[1].last_hidden_state.device)
+            )
+            encoder_outputs[2]["last_hidden_state"] = encoder_outputs[2].last_hidden_state.index_select(
+                0, expanded_return_idx.to(encoder_outputs[2].last_hidden_state.device)
+            )
+            model_kwargs["encoder_outputs"] = encoder_outputs
+        return input_ids, model_kwargs
+
+
+    
+
+### TRAIN AND EVAL FUNCTIONS
     
 def compute_loss(predictions, targets, criterion):
     """Compute our custom loss"""
@@ -1186,23 +1319,6 @@ def compute_loss(predictions, targets, criterion):
 
     return loss
 
-def compute_loss_rw(predictions, targets, w, criterion):
-    """Compute our custom loss"""
-    if len(targets)>0:
-      predictions = predictions[:, :-1, :].contiguous()
-      targets = targets[:, 1:]
-
-      rearranged_output = predictions.view(predictions.shape[0]*predictions.shape[1], -1)
-      rearranged_target = targets.contiguous().view(-1)
-
-      losses = criterion(rearranged_output, rearranged_target).view(predictions.shape[0],predictions.shape[1])
-      losses = losses.sum(axis=1)
-      loss = torch.sum(torch.mul(losses, w))
-
-    else:
-      loss = 0
-
-    return loss
 
 
 def MLM_Loss(encoder, head, masker, inputsid, inputsam, observedmask):
@@ -1225,31 +1341,6 @@ def MLM_Loss(encoder, head, masker, inputsid, inputsam, observedmask):
     else:
         return 0
 
-
-
-
-def MLM_Loss_rw(encoder, head, masker, inputsid, inputsam, observedmask, w):
-    if sum(observedmask) !=0:
-        input_ids, labels = masker.torch_mask_tokens(inputsid[observedmask])
-        w = w[observedmask]
-        attention_mask = inputsam
-        outputs = encoder(
-            input_ids,
-            attention_mask=attention_mask[observedmask],
-            return_dict=True,
-        )
-
-        sequence_output = outputs.last_hidden_state
-        prediction_scores = head(sequence_output)
-
-        masked_lm_loss = None
-        loss_fct = CrossEntropyLoss(reduction='none')  # -100 index = padding token
-
-        masked_lm_loss = loss_fct(prediction_scores.view(-1, encoder.config.vocab_size), labels.view(-1))
-        masked_lm_loss = masked_lm_loss.view()
-        return masked_lm_loss
-    else:
-        return 0
 
 
 def train_unsupervised(model, optimizer, masker, train_dataloader, criterion, alph = 1.0):
@@ -1322,12 +1413,6 @@ def train_unsupervised(model, optimizer, masker, train_dataloader, criterion, al
     epoch_mlm_lossE /= count_E
 
     return epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE
-
-
-
-
-
-
 
 
 def eval_unsupervised(model, masker, test_dataloader, criterion):
@@ -1405,12 +1490,6 @@ def eval_unsupervised(model, masker, test_dataloader, criterion):
         epoch_mlm_lossE /= count_E
 
         return epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE
-
-
-
-
-
-
 
 
 
@@ -1535,9 +1614,6 @@ def unsupervised_auc(model, test_dataloader, ignore_index):
 
 
 
-
-
-import copy
 def get_mi(model, dataset, mask_mhc=True, mask_peptide=True, mask_paired=False):
     """_summary_
     Compute the AUC of the model on the dataset using the Mutual Information on the alpha and beta chain.
@@ -1723,6 +1799,9 @@ def get_auc_mi(model, dataset, mask_mhc=True, mask_peptide=True, mask_paired=Fal
 
 
 
+### SAMPLING FUNCTIONS
+
+
 def load_model_output(tokenizer, mhctok, peptide,  alpha_model=None, beta_model=None, alpha_to_fill=None, beta_to_fill= None, device='cpu', mhc="HLA-A*02:01"):
     df2 = pd.DataFrame(columns =['CDR3b' ,'CDR3a', "peptide","MHC", "binder"])
     print('coucou')
@@ -1751,10 +1830,6 @@ def load_model_output(tokenizer, mhctok, peptide,  alpha_model=None, beta_model=
         df2 = pd.concat([df2, pd.DataFrame([{"CDR3b":beta_seq[i], "CDR3a":alpha_seq[i],"MHC":mhc, "peptide":peptide, "binder":1}])], ignore_index=True)
         dataset.append( MHC=mhc, alpha=alpha_seq[i], beta=beta_seq[i], peptide=peptide, binder=1)
 
-    # df2.to_csv("tmp.csv", index=False)
-
-    # dataset = TCRDataset("tmp.csv", tokenizer, device, mhctok=mhctok)
-    
     return dataset
 
 
@@ -1910,61 +1985,5 @@ def get_starting_batch_from_chain(peptide,  datainit, chain='alpha', MHC='HLA-A*
         dataset.alpha = ['<MIS>']*len(dataset)
     dl = data.DataLoader(dataset, batch_size=len(dataset), shuffle=False, collate_fn=dataset.all2allmhc_collate_function)
     return next(iter(dl))
-
-
-
-def get_logproba(dataset, model, ignore_index):
-    dataloaderPetideSpecific = torch.utils.data.DataLoader(dataset=dataset, batch_size=100, shuffle=False, collate_fn=dataset.all2allmhc_collate_function)
-    model.eval()
-    with torch.no_grad():
-
-
-        clf_scoree = []
-        clf_scorea = []
-        clf_scoreb = []
-        Boolbinders = []
-        for i, (peptide, alpha, beta, binder, mhc) in enumerate(dataloaderPetideSpecific):
-            peptide_input = peptide['input_ids']
-            peptide_mask= peptide["attention_mask"]
-            peptide_tokentype = peptide['token_type_ids']
-            alpha_input = alpha['input_ids']
-            alpha_mask = alpha["attention_mask"]
-            alpha_tokentype = alpha['token_type_ids']
-            beta_input = beta['input_ids']
-            beta_mask = beta["attention_mask"]
-            beta_tokentype = beta['token_type_ids']
-
-            binder = binder
-
-            clf_label = binder.clone()
-            labels = clf_label
-
-            out = model(input_ids=(alpha_input,beta_input,peptide_input), attention_mask=(alpha_mask,beta_mask,peptide_mask),
-                                            labels=labels, mhc=mhc)
-
-            def softm(x):
-                x = torch.exp(x)
-                su = torch.sum(x, dim=1)
-                x = x/su
-                return x
-
-            prediction_scoresE = out.decoder_outputsE.lm_logits
-            prediction_scoresA = out.decoder_outputsA.lm_logits
-            prediction_scoresB = out.decoder_outputsB.lm_logits
-            predictionsE = F.log_softmax(prediction_scoresE, dim=2)
-            predictionsB = F.log_softmax(prediction_scoresB, dim=2)
-            predictionsA = F.log_softmax(prediction_scoresA, dim=2)
-
-            losse = LLLoss_raw(predictionsE, peptide_input, ignore_index)
-            lossa = LLLoss_raw(predictionsA, alpha_input, ignore_index)
-            lossb = LLLoss_raw(predictionsB, beta_input, ignore_index)
-            clf_scoree += [-1*losse[i].cpu().item() for i in range(len(losse))]
-            clf_scorea += [-1*lossa[i].cpu().item() for i in range(len(lossa))]
-            clf_scoreb += [-1*lossb[i].cpu().item() for i in range(len(lossb))]
-        return clf_scoree, clf_scorea, clf_scoreb
-    
-
-
-
 
 
