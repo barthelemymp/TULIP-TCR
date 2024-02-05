@@ -10,7 +10,10 @@ model weights are in the model_weights folder. You will find this the model used
 
 ## data
 the data folder contains the data to reproduce results of the paper.
-The largest training will be in the Seen.zip
+Seenpeptides.zip: contains the data to reproduce the experiments on seen peptide. (model for this part is directly the one in model_weights)
+Unseenpeptides.zip: contains the data to reproduce the experiments on unseen peptide.
+RepertoireMining.zip: contains the data to reproduce the repertoire mining of neoantigen.
+The largest training will be in the Seenpeptides.zip
 
 
 
