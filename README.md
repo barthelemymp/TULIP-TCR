@@ -20,5 +20,9 @@ We give 3 scripts
  - finetuning.py / run_finetuning.py finetune the model on a subset
  - predict.py rank TCRs for a given epitope
 
-## Data split and interactive collab to come
 
+## Colab:
+tulip.ipynb enables playing with TULIP from colab
+
+## Sampling new TCR ?
+Understanding how to best sample using TULIP, is still a work in progress. Sampling functions are though available.
