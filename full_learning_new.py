@@ -132,12 +132,6 @@ def main():
 
     from src.multiTrans import TulipPetal, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip, get_auc_mi
 
-    #     from src.multiTransFlex import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip
-    # elif args.flex2:
-    #     print("flex2")
-    #     from src.multiTransFlex2 import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip
-    # else:
-    #     from src.multiTrans import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip
 
     wandb.login()
     torch.manual_seed(0)

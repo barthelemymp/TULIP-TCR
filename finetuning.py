@@ -322,14 +322,6 @@ def main():
     target_peptidesFinal_top = pd.read_csv(test_path)["peptide"].value_counts().index[:20]
     # pd.read_csv(test_path)["peptide"].unique()
 
-    # if args.below20:
-    #     test_path =  "../NetTCR/dataNew/Full_below20withneg_2.csv"
-    #     train_path ="../NetTCR/dataNew/Full_train_pretune_mhcX_2.csv"
-    #     datasetTrainFull = TCRDataset("../NetTCR/dataNew/Full_train_pretune_mhcX_2.csv", tokenizer, device,excluded_peptide=peplistout, mhctok=mhctok)
-    #     train_dataloaderFull = torch.utils.data.DataLoader(dataset=datasetTrainFull, batch_size=args.batch_size, shuffle=True, collate_fn=datasetTrainFull.all2allmhc_collate_function) 
-    #     target_peptidesFinal = peplistout
-    #     datasetValidFinal = TCRDataset(test_path, tokenizer, device,target_binder=False, mhctok=mhctok)
-    #     valid_dataloaderFinal = torch.utils.data.DataLoader(dataset=datasetValidFinal, batch_size=args.batch_size, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
 
     datasetfinetune_foreval = TCRDataset("../data/tcr/tulip2_finetune.csv", tokenizer, device, mhctok=mhctok).select_chain(target_chain='both')
     # datasetfinetune_foreval = toy_dataset(datasetfinetune_foreval)
@@ -348,20 +340,11 @@ def main():
                 print(target_peptide)
                 sys.stdout.flush()
                 auca, aucb, auce = unsupervised_auc(model, dataloaderPetideSpecific, tokenizer.pad_token_id)
-                acca, accb, acce = acc_unsupervised(model, dataloaderPetideSpecific)
-                aucami, aucbmi = get_auc_mi(model, datasetPetideSpecific, mask_mhc=True, mask_peptide=True, mask_paired=False)
-                wandb.log({target_peptide+"_acca":acca,target_peptide+"_accb":accb,target_peptide+"_a":auca, target_peptide+"_b":aucb,target_peptide+"_mia":aucami, target_peptide+"_mib":aucbmi,target_peptide+"_e":auce, "epochT":epoch})
-                
-                # if target_peptide in target_peptidesFinal_top:
-                #     datasetPetideSpecific= TCRDataset('../data/tcr/VDJ_test_3.csv', tokenizer, device, target_peptide=target_peptide, mhctok=mhctok)
-                #     dataloaderPetideSpecific = torch.utils.data.DataLoader(dataset=datasetPetideSpecific, batch_size=1, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
-                #     auca3, aucb3, auce3 = unsupervised_auc(model, dataloaderPetideSpecific, tokenizer.pad_token_id)
-                #     deltaauce = auce - auce3 
-                #     wandb.log({target_peptide+"_acca":acca,target_peptide+"_accb":accb,target_peptide+"_a":auca, target_peptide+"_b":aucb,target_peptide+"_mia":aucami, target_peptide+"_mib":aucbmi,target_peptide+"_e":auce, target_peptide+"_deltaauce":deltaauce,"epochT":epoch})
-                #     trigger_sync()
 
-                # wandb.log({target_peptide+"_acca":acca,target_peptide+"_accb":accb,target_peptide+"_a":auca, target_peptide+"_b":aucb,target_peptide+"_e":auce, "epochT":epoch})
-                # trigger_sync() 
+                aucami, aucbmi = get_auc_mi(model, datasetPetideSpecific, mask_mhc=True, mask_peptide=True, mask_paired=False)
+                wandb.log({target_peptide+"_a":auca, target_peptide+"_b":aucb,target_peptide+"_mia":aucami, target_peptide+"_mib":aucbmi,target_peptide+"_e":auce, "epochT":epoch})
+                
+
                 aucelist.append(auce)
                 aucalist.append(auca)
                 aucblist.append(aucb)
@@ -381,79 +364,14 @@ def main():
                 epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE = eval_unsupervised(model, masker, valid_dataloaderFinal_true, criterion)
                 print(epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE,file=sys.stdout)
                 sys.stdout.flush()
-                acca, accb, acce = acc_unsupervised(model, valid_dataloaderFinal_true)
 
-                auca, aucb, auce = unsupervised_auc(model, valid_dataloaderFinal, tokenizer.pad_token_id)
-                wandb.log({"epoch_lm_lossAu_val": epoch_lm_lossA, "epoch_lm_lossBu_val":epoch_lm_lossB ,"epoch_lm_lossEu_val":epoch_lm_lossE ,"epoch_mlm_lossAu_val":epoch_mlm_lossA ,"epoch_mlm_lossBu_val":epoch_mlm_lossB ,"epoch_mlm_lossEu_val":epoch_mlm_lossE,"auca":auca, "aucb":aucb, "auce":auce,"acca":acca,"accb":accb, "epochT":epoch})
+                wandb.log({"epoch_lm_lossAu_val": epoch_lm_lossA, "epoch_lm_lossBu_val":epoch_lm_lossB ,"epoch_lm_lossEu_val":epoch_lm_lossE ,"epoch_mlm_lossAu_val":epoch_mlm_lossA ,"epoch_mlm_lossBu_val":epoch_mlm_lossB ,"epoch_mlm_lossEu_val":epoch_mlm_lossE, "epochT":epoch})
             
-        # if epoch%50==0:
-        #     print('define scorer')
-        #     sys.stdout.flush()
-        #     scorer = ScorerFactory(model, tokenizer, mhctok, device, datasetfinetune_foreval, datasetValidFinal).to(device)
-        #     epitope_list = pd.Series(datasetValidFinal.peptide).value_counts().index
-        #     print('define scorer done')
-        #     sys.stdout.flush()
-        #     print('first sample')
-        #     sys.stdout.flush()
-        #     scorer.sample( epitope_list, num_samples=100)
-        #     print('first done')
-        #     sys.stdout.flush()
 
-        #     scorer.num_epochs = 100
-
-        #     lossadv, aucadv = scorer.train_and_evaluate_adv(re_init=False)
-
-        #     losssa, aucsa = scorer.train_and_evaluate_sampled(re_init=False)
-
-        #     accuracycas, roccas = scorer.evaluateCAS(datasetValidFinal)
-
-        #     lossext, aucext= scorer.train_and_evaluate_extended()
-
-        #     wandb.log({"lossadv":lossadv, "aucadv":aucadv, "losssa":losssa, "aucsa":aucsa, "lossext":lossext, "aucext":aucext,"accuracycas":accuracycas, "roccas":roccas, "epochT":epoch})
-
-        #     trigger_sync()
         if epoch%10==0:
             if args.save:
                 print('saving model at ', args.save + str(epoch))
                 model.save_pretrained(args.save + str(epoch))
-
-    # for epoch in range(args.num_epochs+1):
-    #     if epoch%10==0:
-    #         aucelist = []
-    #         aucalist = []
-    #         aucblist = []
-    #         for target_peptide in target_peptidesFinal:
-    #             datasetPetideSpecific= TCRDataset(test_path, tokenizer, device,target_peptide=target_peptide, mhctok=mhctok)
-    #             dataloaderPetideSpecific = torch.utils.data.DataLoader(dataset=datasetPetideSpecific, batch_size=1, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
-    #             print(target_peptide)
-    #             auca, aucb, auce = unsupervised_auc(model, dataloaderPetideSpecific, tokenizer.pad_token_id)
-    #             wandb.log({target_peptide+"_a":auca, target_peptide+"_b":aucb,target_peptide+"_e":auce, "epochT":epoch})
-    #             trigger_sync() 
-    #             aucelist.append(auce)
-    #             aucalist.append(auca)
-    #             aucblist.append(aucb)
-    #         wandb.log({"avg_e":np.mean(aucelist), "avg_a":np.mean(aucalist),"avg_b":np.mean(aucblist), "epochT":epoch})
-    #         trigger_sync() 
-
-    #     print("Starting epoch", epoch+1)
-    #     epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE = train_unsupervised(model, optimizer, masker, train_dataloaderFull, criterion)
-    #     print(epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE)
-    #     wandb.log({"epoch_lm_lossAu": epoch_lm_lossA, "epoch_lm_lossBu":epoch_lm_lossB ,"epoch_lm_lossEu":epoch_lm_lossE ,"epoch_mlm_lossAu":epoch_mlm_lossA ,"epoch_mlm_lossBu":epoch_mlm_lossB ,"epoch_mlm_lossEu":epoch_mlm_lossE, "epochT":epoch})
-    #     trigger_sync() 
-    #     if epoch%20==0:
-    #         with  torch.no_grad():
-    #             epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE = eval_unsupervised(model, masker, valid_dataloaderFinal, criterion)
-    #             print(epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE)
-    #             auca, aucb, auce = unsupervised_auc(model, valid_dataloaderFinal, tokenizer.pad_token_id)
-    #             wandb.log({"epoch_lm_lossAu_val": epoch_lm_lossA, "epoch_lm_lossBu_val":epoch_lm_lossB ,"epoch_lm_lossEu_val":epoch_lm_lossE ,"epoch_mlm_lossAu_val":epoch_mlm_lossA ,"epoch_mlm_lossBu_val":epoch_mlm_lossB ,"epoch_mlm_lossEu_val":epoch_mlm_lossE,"auca":auca, "aucb":aucb, "auce":auce, "epochT":epoch})
-    #             trigger_sync() 
-    #             if epoch%20==0:
-    #                 if args.save:
-    #                     if args.saveepoch:
-    #                         model.save_pretrained(args.save + str(epoch))
-    #                     else:
-    #                         model.save_pretrained(args.save)
-
 
 
 if __name__ == "__main__":
