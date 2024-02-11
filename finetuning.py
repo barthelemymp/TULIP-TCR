@@ -38,9 +38,7 @@ from torch.profiler import profile, record_function, ProfilerActivity
 import wandb
 
 import argparse
-from src.multiTrans_brouillon import TulipPetal, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip, get_auc_mi
-from src.eval_metrics import acc_unsupervised, ScorerFactory
-
+from src.multiTrans import TulipPetal, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip, get_auc_mi
 
 from wandb_osh.hooks import TriggerWandbSyncHook
 

@@ -130,8 +130,7 @@ def main():
         modelconfig = json.load(read_file)
 
 
-    from src.multiTrans_brouillon import TulipPetal, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip, get_auc_mi
-    from src.eval_metrics import acc_unsupervised, ScorerFactory
+    from src.multiTrans import TulipPetal, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip, get_auc_mi
 
     #     from src.multiTransFlex import ED_BertForSequenceClassification, TCRDataset, BertLastPooler, unsupervised_auc, train_unsupervised, eval_unsupervised, MyMasking, Tulip
     # elif args.flex2:
@@ -311,14 +310,6 @@ def main():
     target_peptidesFinal_top = pd.read_csv(test_path)["peptide"].value_counts().index[:10]
     # pd.read_csv(test_path)["peptide"].unique()
 
-    # if args.below20:
-    #     test_path =  "../NetTCR/dataNew/Full_below20withneg_2.csv"
-    #     train_path ="../NetTCR/dataNew/Full_train_pretune_mhcX_2.csv"
-    #     datasetTrainFull = TCRDataset("../NetTCR/dataNew/Full_train_pretune_mhcX_2.csv", tokenizer, device,excluded_peptide=peplistout, mhctok=mhctok)
-    #     train_dataloaderFull = torch.utils.data.DataLoader(dataset=datasetTrainFull, batch_size=args.batch_size, shuffle=True, collate_fn=datasetTrainFull.all2allmhc_collate_function) 
-    #     target_peptidesFinal = peplistout
-    #     datasetValidFinal = TCRDataset(test_path, tokenizer, device,target_binder=False, mhctok=mhctok)
-    #     valid_dataloaderFinal = torch.utils.data.DataLoader(dataset=datasetValidFinal, batch_size=args.batch_size, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
 
     datasetfinetune_foreval = TCRDataset("../data/tcr/tulip2_finetune.csv", tokenizer, device, mhctok=mhctok).select_chain(target_chain='both')
     # datasetfinetune_foreval = toy_dataset(datasetfinetune_foreval)
@@ -355,42 +346,7 @@ def main():
         print(epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE,file=sys.stdout)
         wandb.log({"epoch_lm_lossAu": epoch_lm_lossA, "epoch_lm_lossBu":epoch_lm_lossB ,"epoch_lm_lossEu":epoch_lm_lossE ,"epoch_mlm_lossAu":epoch_mlm_lossA ,"epoch_mlm_lossBu":epoch_mlm_lossB ,"epoch_mlm_lossEu":epoch_mlm_lossE, "epochT":epoch})
         trigger_sync()
-        # if epoch%20==0:
-            # with  torch.no_grad():
-            #     epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE = eval_unsupervised(model, masker, valid_dataloaderFinal_true, criterion)
-            #     print(epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE,file=sys.stdout)
-            #     sys.stdout.flush()
-            #     # acca, accb, acce = acc_unsupervised(model, valid_dataloaderFinal_true)
 
-            #     auca, aucb, auce = unsupervised_auc(model, valid_dataloaderFinal, tokenizer.pad_token_id)
-            #     wandb.log({"epoch_lm_lossAu_val": epoch_lm_lossA, "epoch_lm_lossBu_val":epoch_lm_lossB ,"epoch_lm_lossEu_val":epoch_lm_lossE ,"epoch_mlm_lossAu_val":epoch_mlm_lossA ,"epoch_mlm_lossBu_val":epoch_mlm_lossB ,"epoch_mlm_lossEu_val":epoch_mlm_lossE,"auca":auca, "aucb":aucb, "auce":auce,"acca":acca,"accb":accb, "epochT":epoch})
-            
-        # if epoch%50==0:
-        #     print('define scorer')
-        #     sys.stdout.flush()
-        #     scorer = ScorerFactory(model, tokenizer, mhctok, device, datasetfinetune_foreval, datasetValidFinal).to(device)
-        #     epitope_list = pd.Series(datasetValidFinal.peptide).value_counts().index
-        #     print('define scorer done')
-        #     sys.stdout.flush()
-        #     print('first sample')
-        #     sys.stdout.flush()
-        #     scorer.sample( epitope_list, num_samples=100)
-        #     print('first done')
-        #     sys.stdout.flush()
-
-        #     scorer.num_epochs = 100
-
-        #     lossadv, aucadv = scorer.train_and_evaluate_adv(re_init=False)
-
-        #     losssa, aucsa = scorer.train_and_evaluate_sampled(re_init=False)
-
-        #     accuracycas, roccas = scorer.evaluateCAS(datasetValidFinal)
-
-        #     lossext, aucext= scorer.train_and_evaluate_augmented(target_peptide='LLFGYPVYV')
-
-        #     wandb.log({"lossadv":lossadv, "aucadv":aucadv, "losssa":losssa, "aucsa":aucsa, "lossext":lossext, "aucext":aucext,"accuracycas":accuracycas, "roccas":roccas, "epochT":epoch})
-
-        #     trigger_sync()
         if epoch%10==0:
             if args.save:
                 print('saving model at ', args.save + str(epoch))

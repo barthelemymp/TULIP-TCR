@@ -30,6 +30,11 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 ### DATA
 
 def generate_negative(df, neg_per_pos=5):
+    """
+    Generate negative data by randomly sampling from the dataset.
+    For every positive datapoint, we resample the TCRs among tcrs not binding the same epitope until we have neg_per_pos negative datapoints.
+    
+    """
     epit = df["peptide"].unique()
     epitope_A = {epitope:df[df["peptide"]==epitope]["CDR3a"].unique() for epitope in epit}
     epitope_B = {epitope:df[df["peptide"]==epitope]["CDR3b"].unique() for epitope in epit}
@@ -102,6 +107,7 @@ class TCRDataset(data.Dataset):
 
     @classmethod
     def empty_init(cls, tokenizer, device, mhctok=None ):
+        """        Create an empty instance of the class, with no data. """
         obj = cls.__new__(cls)  # Does not call __init__
         super(TCRDataset, obj).__init__()  # Don't forget to call any polymorphic base class initializers
         obj.device=device
@@ -117,6 +123,7 @@ class TCRDataset(data.Dataset):
         return obj
 
     def generate_unconditional_data(self, mask_alpha=True, mask_beta=True, mask_peptide=True, mask_mhc=False):
+        """Generate a new dataset with the same data, but with some of the data masked. """
         new = self.__class__.empty_init(self.tokenizer, self.device, self.mhctok)
         for i in range(len(self)):
             if mask_alpha:
@@ -344,6 +351,7 @@ class ClassifCausalLMOutputWithCrossAttentions(ModelOutput):
 
 
 class BertLastPooler(nn.Module):
+    """ Policy for pooling the last (EOS) hidden states of a model into a single vector."""
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
@@ -351,7 +359,7 @@ class BertLastPooler(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, targetind) -> torch.Tensor:
         # We "pool" the model by simply taking the hidden state corresponding
-        # to the first token.
+        # to the LAST token.
         ele = torch.arange(0, hidden_states.shape[0])
 
         first_token_tensor = hidden_states[ele.long(), targetind.long()]#.gather(1, targetind.view(-1,1))#hidden_states[:, -1]
@@ -362,6 +370,7 @@ class BertLastPooler(nn.Module):
 
 
 class TulipPetal(BertPreTrainedModel):
+    """ TULIP decoder models. """
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
@@ -372,6 +381,7 @@ class TulipPetal(BertPreTrainedModel):
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
         self.dropout = nn.Dropout(classifier_dropout)
+        # classifier is unused but can easibily be used again to make TULIP a supervised model
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         self.LMcls = BertOnlyMLMHead(config)
         self.alpha = 0.0
@@ -1920,8 +1930,6 @@ def sample_chain_de_novo(model, tokenizer, mhctok, starting_batch, peptide_str, 
         dts = load_model_output(tokenizer, mhctok, peptide_str,  alpha_model=generate_ids, beta_model=beta_input, alpha_to_fill=None, beta_to_fill= None, device=model.device)
 
     return dts, generate_ids
-
-
 
 def sample_tcr_denovo(model, peptide, tokenizer, mhctok,  n_recycle=3, num_return_sequences=1, mode='sampling', temperature= 1.0):
         out_dts = TCRDataset.empty_init(tokenizer, model.device, mhctok=mhctok)
