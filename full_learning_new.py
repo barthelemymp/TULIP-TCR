@@ -145,10 +145,7 @@ def main():
     train_path = args.train_dir
 
 
-
-    # mhcX = False
-    # hideMHC = True
-    tokenizer = AutoTokenizer.from_pretrained("aatok/")#lightonai/RITA_l")#/content/drive/MyDrive/phd/TCREp/")
+    tokenizer = AutoTokenizer.from_pretrained("aatok/")
     if tokenizer.pad_token is None:
         tokenizer.add_special_tokens({'pad_token': '<PAD>'})
 
@@ -268,20 +265,12 @@ def main():
     model.to(device)
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    print("pti",tokenizer.pad_token_id,file=sys.stdout)
     criterion = nn.NLLLoss(ignore_index=tokenizer.pad_token_id,  reduction='sum')
 
 
     datasetTrainFull = TCRDataset(train_path, tokenizer, device, mhctok=mhctok)
     datasetTrainFull.set_chain_masking_proba(proba=args.masking_proba)
     train_dataloaderFull = torch.utils.data.DataLoader(dataset=datasetTrainFull, batch_size=args.batch_size, shuffle=True, collate_fn=datasetTrainFull.all2allmhc_collate_function) 
-    datasetValidFinal = TCRDataset(test_path, tokenizer, device, mhctok=mhctok)
-    valid_dataloaderFinal = torch.utils.data.DataLoader(dataset=datasetValidFinal, batch_size=args.batch_size, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
-    datasetValidFinal_true = TCRDataset(test_path, tokenizer, device,target_binder=True, mhctok=mhctok)
-    valid_dataloaderFinal_true = torch.utils.data.DataLoader(dataset=datasetValidFinal_true, batch_size=args.batch_size, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
-
-
-    #valid_dataloaderFull = torch.utils.data.DataLoader(dataset=datasetValidFull, batch_size=1, shuffle=True, collate_fn=datasetValidFull.all2allmhc_collate_function) 
 
     masker = MyMasking(tokenizer, mlm_probability = 0.15)
 
@@ -301,12 +290,8 @@ def main():
     trigger_sync() 
 
     target_peptidesFinal = pd.read_csv(test_path)["peptide"].value_counts().index
-    target_peptidesFinal_top = pd.read_csv(test_path)["peptide"].value_counts().index[:10]
-    # pd.read_csv(test_path)["peptide"].unique()
 
 
-    datasetfinetune_foreval = TCRDataset("../data/tcr/tulip2_finetune.csv", tokenizer, device, mhctok=mhctok).select_chain(target_chain='both')
-    # datasetfinetune_foreval = toy_dataset(datasetfinetune_foreval)
     for epoch in range(0, args.num_epochs+1):
         if epoch%20==0:
             aucelist = []
@@ -314,20 +299,17 @@ def main():
             aucblist = []
             for target_peptide in target_peptidesFinal:
                 datasetPetideSpecific= TCRDataset(test_path, tokenizer, device, target_peptide=target_peptide, mhctok=mhctok)
-                dataloaderPetideSpecific = torch.utils.data.DataLoader(dataset=datasetPetideSpecific, batch_size=1, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
-                datasetPetideSpecific_true= TCRDataset(test_path, tokenizer, device, target_peptide=target_peptide, target_binder=1 ,mhctok=mhctok)
-                dataloaderPetideSpecific_true = torch.utils.data.DataLoader(dataset=datasetPetideSpecific_true, batch_size=1, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
+                dataloaderPetideSpecific = torch.utils.data.DataLoader(dataset=datasetPetideSpecific, batch_size=1, shuffle=True, collate_fn=datasetPetideSpecific.all2allmhc_collate_function) 
+
                 print(target_peptide)
                 sys.stdout.flush()
                 auca, aucb, auce = unsupervised_auc(model, dataloaderPetideSpecific, tokenizer.pad_token_id)
-                # acca, accb, acce = acc_unsupervised(model, dataloaderPetideSpecific)
+
                 aucami, aucbmi = get_auc_mi(model, datasetPetideSpecific, mask_mhc=True, mask_peptide=True, mask_paired=False)
-                if target_peptide in target_peptidesFinal_top:
-                    wandb.log({target_peptide+"_a":auca, target_peptide+"_b":aucb,target_peptide+"_mia":aucami, target_peptide+"_mib":aucbmi,target_peptide+"_e":auce, "epochT":epoch})#target_peptide+"_acca":acca,target_peptide+"_accb":accb,
+                
+                wandb.log({target_peptide+"_a":auca, target_peptide+"_b":aucb,target_peptide+"_mia":aucami, target_peptide+"_mib":aucbmi,target_peptide+"_e":auce, "epochT":epoch})#target_peptide+"_acca":acca,target_peptide+"_accb":accb,
                 trigger_sync()
 
-                # wandb.log({target_peptide+"_acca":acca,target_peptide+"_accb":accb,target_peptide+"_a":auca, target_peptide+"_b":aucb,target_peptide+"_e":auce, "epochT":epoch})
-                # trigger_sync() 
                 aucelist.append(auce)
                 aucalist.append(auca)
                 aucblist.append(aucb)

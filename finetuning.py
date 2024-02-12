@@ -120,7 +120,6 @@ def main():
 
     parser.add_argument("--freeze", action="store_true", help="Whether to run training.")
     parser.add_argument("--skipMiss", action="store_true", help="Whether to run training.")
-    # parser.add_argument("--saveepoch", action="store_true", help="Whether to run training.")
 
     args = parser.parse_args()
 
@@ -144,9 +143,8 @@ def main():
     test_path = args.test_dir
     train_path = args.train_dir
 
-    # mhcX = False
-    # hideMHC = True
-    tokenizer = AutoTokenizer.from_pretrained("aatok/")#lightonai/RITA_l")#/content/drive/MyDrive/phd/TCREp/")
+
+    tokenizer = AutoTokenizer.from_pretrained("aatok/")
     if tokenizer.pad_token is None:
         tokenizer.add_special_tokens({'pad_token': '<PAD>'})
 
@@ -180,7 +178,7 @@ def main():
     vocabsize = len(tokenizer._tokenizer.get_vocab())
     mhcvocabsize = len(mhctok._tokenizer.get_vocab())
     print("Loading models ..")
-    # vocabsize = encparams["vocab_size"]
+
     max_length = 50
     encoder_config_pep = BertConfig(vocab_size = vocabsize,
                         max_position_embeddings = max_length, # this shuold be some large value
@@ -269,15 +267,6 @@ def main():
             param.requires_grad = False
         for param in model.encoderE.parameters(): #params have requires_grad=True by default
             param.requires_grad = False
-        # if args.flex:
-        #     for param in model.SkipclassifierB.parameters(): #params have requires_grad=True by default
-        #         param.requires_grad = False
-        #     for param in model.SkipclassifierA.parameters(): #params have requires_grad=True by default
-        #         param.requires_grad = False
-        #     for param in model.SkipclassifierE.parameters(): #params have requires_grad=True by default
-        #         param.requires_grad = False
-
-
 
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     print("pti",tokenizer.pad_token_id)
@@ -320,11 +309,9 @@ def main():
 
     target_peptidesFinal = pd.read_csv(test_path)["peptide"].value_counts().index
     target_peptidesFinal_top = pd.read_csv(test_path)["peptide"].value_counts().index[:20]
-    # pd.read_csv(test_path)["peptide"].unique()
 
 
-    datasetfinetune_foreval = TCRDataset("../data/tcr/tulip2_finetune.csv", tokenizer, device, mhctok=mhctok).select_chain(target_chain='both')
-    # datasetfinetune_foreval = toy_dataset(datasetfinetune_foreval)
+
     for epoch in range(0, args.num_epochs+1):
         if epoch%20==0:
             aucelist = []
@@ -335,12 +322,9 @@ def main():
             for target_peptide in target_peptidesFinal:
                 datasetPetideSpecific= TCRDataset(test_path, tokenizer, device, target_peptide=target_peptide, mhctok=mhctok)
                 dataloaderPetideSpecific = torch.utils.data.DataLoader(dataset=datasetPetideSpecific, batch_size=1, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
-                datasetPetideSpecific_true= TCRDataset(test_path, tokenizer, device, target_peptide=target_peptide, target_binder=1 ,mhctok=mhctok)
-                dataloaderPetideSpecific_true = torch.utils.data.DataLoader(dataset=datasetPetideSpecific_true, batch_size=1, shuffle=True, collate_fn=datasetValidFinal.all2allmhc_collate_function) 
                 print(target_peptide)
                 sys.stdout.flush()
                 auca, aucb, auce = unsupervised_auc(model, dataloaderPetideSpecific, tokenizer.pad_token_id)
-
                 aucami, aucbmi = get_auc_mi(model, datasetPetideSpecific, mask_mhc=True, mask_peptide=True, mask_paired=False)
                 wandb.log({target_peptide+"_a":auca, target_peptide+"_b":aucb,target_peptide+"_mia":aucami, target_peptide+"_mib":aucbmi,target_peptide+"_e":auce, "epochT":epoch})
                 
@@ -364,10 +348,8 @@ def main():
                 epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE = eval_unsupervised(model, masker, valid_dataloaderFinal_true, criterion)
                 print(epoch_lm_lossA, epoch_lm_lossB, epoch_lm_lossE, epoch_mlm_lossA, epoch_mlm_lossB, epoch_mlm_lossE,file=sys.stdout)
                 sys.stdout.flush()
-
                 wandb.log({"epoch_lm_lossAu_val": epoch_lm_lossA, "epoch_lm_lossBu_val":epoch_lm_lossB ,"epoch_lm_lossEu_val":epoch_lm_lossE ,"epoch_mlm_lossAu_val":epoch_mlm_lossA ,"epoch_mlm_lossBu_val":epoch_mlm_lossB ,"epoch_mlm_lossEu_val":epoch_mlm_lossE, "epochT":epoch})
             
-
         if epoch%10==0:
             if args.save:
                 print('saving model at ', args.save + str(epoch))
