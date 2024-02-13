@@ -32,13 +32,21 @@ tulip.ipynb enables playing with TULIP from colab
 
 ## Code options:
 `--skipMiss`: enables the mopdel to directly learn the encoded representation of a missing sequence. Without it, the model learn the embedding of `<MIS>` and pass it to the encoder. This option is largely recommended, as it avoid having the missing sequences taking a too large importance in the training the encoders.
+
 `--train_dir` and `--test_dir`: path to the train and test csv files.
+
 `--modelconfig`:path to json including the config of the model.
+
 `--save` and `--load`: path to the save the model and path to the saved model if we want to start from a pretrained model.
+
 `--lr`L learning rate
+
 `--weight_decay`: weight decay for the adam optimized
+
 `--nomhc`: enables to skip the mhc. As a general rule, the mhc tokenizer is beneficial for peptides presented on HLA, for which TULIP has seen a variety of peptide.
+
 `--num_epochs`: number of epochs
+
 `--masking_proba`: it is a new form of regularization (not used in the paper). default is 0.0. If not null, this is the proba to randomly mask the alpha or the beta chain during training. This is made to mitigate some experimental biases on bulk vs single cell. (for example, if for a peptide we only have TCR missing their alpha chain, we would like to avoid TULIP to learn a signal between missing alpha chain and this peptide). This regularization was proven usefull when using TULIP has a geneartive model. 
 
 
