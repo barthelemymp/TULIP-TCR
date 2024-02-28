@@ -29,6 +29,10 @@ We give 3 scripts
 ## Colab:
 tulip.ipynb enables playing with TULIP from colab
 
+## HLA remark:
+For rare HLA, TULIP works better with `--nomhc` option. 
+TO DO: predict HLA indepndantly and remove it from epitope prediction.
+
 
 ## Code options:
 `--skipMiss`: enables the mopdel to directly learn the encoded representation of a missing sequence. Without it, the model learn the embedding of `<MIS>` and pass it to the encoder. This option is largely recommended, as it avoid having the missing sequences taking a too large importance in the training the encoders.
