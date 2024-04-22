@@ -16,6 +16,7 @@ Seenpeptides.zip: contains the data to reproduce the experiments on seen peptide
 Unseenpeptides.zip: contains the data to reproduce the experiments on unseen peptide.
 RepertoireMining.zip: contains the data to reproduce the repertoire mining of neoantigen.
 The largest training will be in the Seenpeptides.zip
+The data should be a csv as in `data/VDJ_test_2.csv`  and have the column CDR3a, CDR3b, MHC, peptide, and binder. binder will only be used to compute aucs, so you can put only ones if you just want to train or predict.
 
 
 
@@ -23,7 +24,7 @@ The largest training will be in the Seenpeptides.zip
 We give 3 scripts 
  - full_learning_new.py / run_full_leaning.sh implement the training from scratch of the model
  - finetuning.py / run_finetuning.py finetune the model on a subset
- - predict.py rank TCRs for a given epitope
+ - predict.py rank TCRs for a given epitope. You can run it with: `python predict.py --test_dir data/VDJ_test_2.csv --output data/`
 
 
 ## Colab:
