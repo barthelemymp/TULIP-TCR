@@ -50,4 +50,5 @@ set -x
 python full_learning.py --train_dir ../mydatapath/dataNew/Full_train_pretune_mhcX_2.csv \
                         --test_dir ../mydatapath/dataNew/VDJ_test_2.csv \
                         --modelconfig configs/shallow.config.json \
-                        --save multiTCR_s_flex
+                        --save savepath \
+                        --skipMiss \

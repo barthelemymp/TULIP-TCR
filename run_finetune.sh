@@ -47,12 +47,11 @@ set -x
  
 # Pour la partition "gpu_p5", le code doit etre compile avec les modules compatibles
 # Execution du code
-python finetuning.py --train_dir /gpfswork/rech/mdb/urz96ze/barth/MultiFormerTCR/VDJ_train_p53.csv \
-                        --test_dir /gpfswork/rech/mdb/urz96ze/barth/MultiFormerTCR/VDJ_test_p53.csv \
+python finetuning.py --train_dir /yourtrain.csv \
+                        --test_dir /yourtest.csv \
                         --modelconfig configs/shallow.config.json \
-                        --load pm53_wd20 \
-                        --mhcX \
+                        --load mymodel \
+                        --skipMiss \
                         --freeze \
                         --weight_decay 0.1 \
                         --lr 0.00005 \
-                        --wb_dir p53ft \
