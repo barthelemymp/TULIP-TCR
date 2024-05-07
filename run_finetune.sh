@@ -50,7 +50,7 @@ set -x
 python finetuning.py --train_dir /yourtrain.csv \
                         --test_dir /yourtest.csv \
                         --modelconfig configs/shallow.config.json \
-                        --load mymodel \
+                        --load mymodelpath \
                         --skipMiss \
                         --freeze \
                         --weight_decay 0.1 \
