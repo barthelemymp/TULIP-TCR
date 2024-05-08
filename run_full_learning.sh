@@ -47,8 +47,8 @@ set -x
  
 # Pour la partition "gpu_p5", le code doit etre compile avec les modules compatibles
 # Execution du code
-python full_learning.py --train_dir ../mydatapath/dataNew/Full_train_pretune_mhcX_2.csv \
+python full_learning.py --train_dir ../mydatapath/dataNew/yourtrain.csv \
                         --test_dir ../mydatapath/dataNew/VDJ_test_2.csv \
-                        --modelconfig configs/shallow.config.json \
+                        --modelconfig configs/shallow0_decoupled.config.json \
                         --save savepath \
                         --skipMiss \
