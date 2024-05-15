@@ -23,6 +23,7 @@ Unseenpeptides.zip: contains the data to reproduce the experiments on unseen pep
 RepertoireMining.zip: contains the data to reproduce the repertoire mining of neoantigen.
 The largest training will be in the Seenpeptides.zip
 The data should be a csv as in `data/VDJ_test_2.csv`  and have the column CDR3a, CDR3b, MHC, peptide, and binder. binder will only be used to compute aucs, so you can put only ones if you just want to train or predict.
+The missing elements should be replaced by the missing token: <MIS>
 
 
 
